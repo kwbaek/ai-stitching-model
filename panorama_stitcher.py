@@ -39,12 +39,12 @@ class PanoramaStitcher:
     def blend_images(self, img1: np.ndarray, img2: np.ndarray, 
                     H: np.ndarray, blend_method: str = 'linear') -> np.ndarray:
         """
-        두 이미지를 블렌딩하여 합성
+        두 이미지를 블렌딩하여 합성 (파노라마 스타일: 수평 배치)
         
         Args:
-            img1: 첫 번째 이미지
-            img2: 두 번째 이미지
-            H: 호모그래피 행렬
+            img1: 첫 번째 이미지 (기준, 왼쪽에 고정)
+            img2: 두 번째 이미지 (오른쪽에 배치)
+            H: 호모그래피 행렬 (img1의 특징점 -> img2 좌표계)
             blend_method: 'linear', 'multiband', 'none'
             
         Returns:
@@ -53,37 +53,40 @@ class PanoramaStitcher:
         h1, w1 = img1.shape[:2]
         h2, w2 = img2.shape[:2]
         
-        # img1을 img2 좌표계로 변환
+        # img1의 모서리를 img2 좌표계로 변환하여 겹침 영역 파악
         corners1 = np.float32([
             [0, 0], [w1, 0], [w1, h1], [0, h1]
         ])
-        corners1_transformed = cv2.perspectiveTransform(
+        corners1_in_img2 = cv2.perspectiveTransform(
             corners1.reshape(1, -1, 2), H
         ).reshape(-1, 2)
         
-        # 전체 캔버스 크기 계산
-        all_corners = np.vstack([
-            corners1_transformed,
-            np.float32([[0, 0], [w2, 0], [w2, h2], [0, h2]])
-        ])
+        # img1이 img2 좌표계에서 어디에 위치하는지 확인
+        x_coords = corners1_in_img2[:, 0]
+        y_coords = corners1_in_img2[:, 1]
         
-        x_min, y_min = np.int32(all_corners.min(axis=0))
-        x_max, y_max = np.int32(all_corners.max(axis=0))
+        # 파노라마: img1을 왼쪽에, img2를 오른쪽에 배치
+        # img1의 왼쪽 상단이 (0, 0) 근처에 오도록 조정
+        x_min = min(0, x_coords.min())
+        x_max = max(w2, x_coords.max())
+        y_min = min(0, y_coords.min())
+        y_max = max(h2, y_coords.max())
         
-        # 오프셋 계산
+        # 캔버스 크기 계산 (수평으로 길게)
+        canvas_w = int(x_max - x_min)
+        canvas_h = int(max(h1, h2, y_max - y_min))
+        
+        # 오프셋: img1의 왼쪽 상단이 (0, 0)에 오도록
         offset_x = -x_min
         offset_y = -y_min
-        canvas_w = x_max - x_min
-        canvas_h = y_max - y_min
         
-        # 변환 행렬에 오프셋 추가
+        # img1을 변환하여 배치
         M = np.array([
             [1, 0, offset_x],
             [0, 1, offset_y],
             [0, 0, 1]
         ]) @ H
         
-        # 이미지 변환
         img1_warped = cv2.warpPerspective(
             img1, M, (canvas_w, canvas_h),
             flags=cv2.INTER_LINEAR,
@@ -91,8 +94,11 @@ class PanoramaStitcher:
             borderValue=(0, 0, 0)
         )
         
+        # img2를 오른쪽에 배치 (원본 위치 기준)
         img2_placed = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
-        img2_placed[offset_y:offset_y+h2, offset_x:offset_x+w2] = img2
+        img2_x = offset_x
+        img2_y = offset_y
+        img2_placed[img2_y:img2_y+h2, img2_x:img2_x+w2] = img2
         
         # 마스크 생성
         mask1 = (img1_warped.sum(axis=2) > 0).astype(np.float32)
