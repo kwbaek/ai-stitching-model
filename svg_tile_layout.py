@@ -119,42 +119,71 @@ class TileLayoutCalculator:
         positions = {0: (0, 0)}
         visited = {0}
         
-        # BFS로 위치 계산
+        # BFS로 위치 계산 (개선된 버전)
         queue = [0]
+        position_conflicts = {}  # 위치 충돌 추적
         
         while queue:
             current = queue.pop(0)
             current_pos = positions[current]
             
             # 인접한 이미지 찾기
+            neighbors = []
             for (i, j), rel_info in relationships.items():
                 if i == current and j not in visited:
-                    direction = rel_info['direction']
-                    
-                    # 방향에 따라 위치 계산
-                    if direction == 'right':
-                        new_pos = (current_pos[0], current_pos[1] + 1)
-                    elif direction == 'left':
-                        new_pos = (current_pos[0], current_pos[1] - 1)
-                    elif direction == 'down':
-                        new_pos = (current_pos[0] + 1, current_pos[1])
-                    elif direction == 'up':
-                        new_pos = (current_pos[0] - 1, current_pos[1])
-                    else:  # overlap
-                        new_pos = current_pos
-                    
-                    positions[j] = new_pos
-                    visited.add(j)
-                    queue.append(j)
+                    neighbors.append((j, rel_info))
+            
+            # 방향별로 정렬 (우선순위: right > down > left > up)
+            direction_priority = {'right': 0, 'down': 1, 'left': 2, 'up': 3}
+            neighbors.sort(key=lambda x: direction_priority.get(x[1]['direction'], 4))
+            
+            for j, rel_info in neighbors:
+                direction = rel_info['direction']
+                
+                # 방향에 따라 위치 계산
+                if direction == 'right':
+                    new_pos = (current_pos[0], current_pos[1] + 1)
+                elif direction == 'left':
+                    new_pos = (current_pos[0], current_pos[1] - 1)
+                elif direction == 'down':
+                    new_pos = (current_pos[0] + 1, current_pos[1])
+                elif direction == 'up':
+                    new_pos = (current_pos[0] - 1, current_pos[1])
+                else:  # overlap or unknown
+                    # 겹치는 경우 오른쪽에 배치
+                    new_pos = (current_pos[0], current_pos[1] + 1)
+                
+                # 위치 충돌 확인 및 해결
+                if new_pos in positions.values():
+                    # 충돌 시 다른 위치 찾기
+                    row, col = new_pos
+                    # 주변 위치 시도
+                    for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1)]:
+                        candidate_pos = (row + dr, col + dc)
+                        if candidate_pos not in positions.values():
+                            new_pos = candidate_pos
+                            break
+                    else:
+                        # 모든 주변 위치가 차있으면 순차적으로 배치
+                        max_col = max([p[1] for p in positions.values()]) if positions else 0
+                        new_pos = (row, max_col + 1)
+                
+                positions[j] = new_pos
+                visited.add(j)
+                queue.append(j)
         
-        # 방문하지 않은 이미지들은 기본 위치에 배치
-        for i in range(n):
-            if i not in visited:
-                # 가장 가까운 위치 찾기
-                positions[i] = (0, len(visited))
-                visited.add(i)
+        # 모든 이미지를 정사각형 그리드로 배치
+        import math
+        grid_size = int(math.ceil(math.sqrt(n)))
         
-        return positions
+        # 모든 이미지를 정사각형 그리드에 배치
+        new_positions = {}
+        for idx in range(n):
+            row = idx // grid_size
+            col = idx % grid_size
+            new_positions[idx] = (row, col)
+        
+        return new_positions
     
     def _reverse_direction(self, direction: str) -> str:
         """방향 반전"""
