@@ -125,89 +125,118 @@ class SVGVectorStitcher:
         
         print(f"Grid layout: {num_rows} rows x {num_cols} cols")
         
-        # 첫 번째 SVG를 기준으로 시작
-        base_svg = svg_files[0]
-        
+        # 빈 SVG 루트 생성
         try:
-            tree = ET.parse(base_svg)
+            # 첫 번째 SVG를 템플릿으로 사용
+            template_svg = svg_files[0]
+            tree = ET.parse(template_svg)
             root = tree.getroot()
+            # 기존 모든 요소 제거 (path, circle 등)
+            for elem in list(root):
+                if elem.tag.endswith('path') or elem.tag.endswith('circle') or elem.tag.endswith('defs'):
+                    root.remove(elem)
         except Exception as e:
-            print(f"Error parsing base SVG: {e}")
+            print(f"Error parsing template SVG: {e}")
             return False
         
-        # SVG 크기 가져오기
-        feat_base = self.matcher.extract_features(base_svg)
-        if feat_base['bbox'] is None:
+        # SVG 크기 가져오기 (viewBox 또는 실제 bbox 사용)
+        try:
+            # viewBox에서 크기 가져오기
+            viewbox = root.get('viewBox', '')
+            if viewbox:
+                parts = viewbox.split()
+                if len(parts) >= 4:
+                    img_width = int(float(parts[2]))
+                    img_height = int(float(parts[3]))
+                else:
+                    img_width, img_height = 4096, 3536
+            else:
+                img_width = int(float(root.get('width', '4096')))
+                img_height = int(float(root.get('height', '3536')))
+        except:
             img_width, img_height = 4096, 3536
-        else:
-            img_width = int(feat_base['bbox']['max_x'] - feat_base['bbox']['min_x'])
-            img_height = int(feat_base['bbox']['max_y'] - feat_base['bbox']['min_y'])
+        
+        print(f"Image size: {img_width} x {img_height}")
+        print(f"Grid: {num_rows} rows x {num_cols} cols")
         
         # 각 이미지를 타일 위치에 배치
         for idx, svg_file in enumerate(svg_files):
-            if idx == 0:
-                # 첫 번째 이미지는 원본 그대로
-                continue
-            
-            row, col = positions.get(idx, (0, idx))
+            row, col = positions.get(idx, (idx // num_cols, idx % num_cols))
             print(f"Placing SVG {idx+1}/{len(svg_files)} at tile ({row}, {col})...")
             
-            # 기준 이미지와 매칭
-            H = self.stitch_svg_pair(base_svg, svg_file)
+            # 타일 위치에 맞는 오프셋 계산
+            offset_x = col * img_width
+            offset_y = row * img_height
             
-            if H is None:
-                # 매칭 실패 시 타일 위치에 직접 배치
-                offset_x = col * img_width
-                offset_y = row * img_height
-                
-                paths = self.extractor.extract_paths_from_svg(svg_file)
-                for path_info in paths:
-                    coords = path_info['coords']
-                    if len(coords) > 0:
-                        coords_array = np.array(coords, dtype=np.float32)
-                        # 타일 위치에 맞게 오프셋 적용
-                        coords_array[:, 0] += offset_x
-                        coords_array[:, 1] += offset_y
-                        
-                        path_d = 'M ' + ' L '.join([f"{x:.1f},{y:.1f}" for x, y in coords_array])
-                        if path_info['d'].endswith('Z'):
-                            path_d += ' Z'
-                        
-                        path_elem = ET.SubElement(root, 'path')
-                        path_elem.set('d', path_d)
-                        path_elem.set('fill', path_info.get('fill', 'lime'))
+            # SVG 파일 직접 파싱하여 path 요소 가져오기
+            try:
+                svg_tree = ET.parse(svg_file)
+                svg_root = svg_tree.getroot()
+            except Exception as e:
+                print(f"Error parsing {svg_file}: {e}")
                 continue
             
-            # 호모그래피로 변환된 좌표 계산
-            paths = self.extractor.extract_paths_from_svg(svg_file)
+            import re
             
-            for path_info in paths:
-                coords = path_info['coords']
+            # path 요소 찾기 (네임스페이스 처리)
+            svg_paths = svg_root.findall('.//{http://www.w3.org/2000/svg}path') + svg_root.findall('.//path')
+            
+            for svg_path in svg_paths:
+                path_d = svg_path.get('d', '')
+                if not path_d:
+                    continue
                 
-                if len(coords) > 0:
-                    coords_array = np.array(coords, dtype=np.float32)
-                    coords_homogeneous = np.column_stack([coords_array, np.ones(len(coords_array))])
-                    transformed = (H @ coords_homogeneous.T).T
-                    transformed_coords = transformed[:, :2] / transformed[:, 2:3]
+                # path d 문자열에서 좌표 추출 및 변환
+                # 숫자 패턴 (음수 포함)
+                def replace_coords(match):
+                    x = float(match.group(1))
+                    y = float(match.group(2))
+                    # 오프셋 적용
+                    x_new = x + offset_x
+                    y_new = y + offset_y
+                    return f"{x_new:.1f},{y_new:.1f}"
+                
+                # 좌표 쌍 찾아서 변환 (M, L, C, Q 등의 명령어 뒤의 좌표)
+                # 패턴: 숫자,숫자 또는 숫자, 숫자
+                path_d_transformed = re.sub(r'([-]?\d+\.?\d*),([-]?\d+\.?\d*)', replace_coords, path_d)
+                
+                # path 요소 생성
+                path_elem = ET.SubElement(root, 'path')
+                path_elem.set('d', path_d_transformed)
+                path_elem.set('fill', svg_path.get('fill', 'lime'))
+                
+                # 다른 속성도 복사
+                for attr in ['stroke', 'stroke-width', 'opacity']:
+                    if svg_path.get(attr):
+                        path_elem.set(attr, svg_path.get(attr))
+            
+            # circle 요소도 포함 (원본 SVG에 있는 경우)
+            svg_circles = svg_root.findall('.//{http://www.w3.org/2000/svg}circle') + svg_root.findall('.//circle')
+            
+            for svg_circle in svg_circles:
+                try:
+                    cx = float(svg_circle.get('cx', '0'))
+                    cy = float(svg_circle.get('cy', '0'))
+                    r = svg_circle.get('r', '0')
+                    fill = svg_circle.get('fill', 'red')
                     
-                    # 타일 위치에 맞는 오프셋 적용
-                    # 기준 이미지의 위치를 고려하여 계산
-                    base_row, base_col = positions.get(0, (0, 0))
-                    # 타일 그리드에 맞게 오프셋 계산
-                    offset_x = col * img_width
-                    offset_y = row * img_height
+                    # 오프셋 적용
+                    cx_new = cx + offset_x
+                    cy_new = cy + offset_y
                     
-                    # 변환된 좌표에 타일 오프셋 추가
-                    transformed_coords[:, 0] += offset_x
-                    transformed_coords[:, 1] += offset_y
+                    # circle 요소 생성
+                    circle_elem = ET.SubElement(root, 'circle')
+                    circle_elem.set('cx', f"{cx_new:.1f}")
+                    circle_elem.set('cy', f"{cy_new:.1f}")
+                    circle_elem.set('r', r)
+                    circle_elem.set('fill', fill)
                     
-                    path_d = 'M ' + ' L '.join([f"{x:.1f},{y:.1f}" for x, y in transformed_coords])
-                    if path_info['d'].endswith('Z'):
-                        path_d += ' Z'
-                    
-                    path_elem = ET.SubElement(root, 'path')
-                    path_elem.set('d', path_d)
-                    path_elem.set('fill', path_info.get('fill', 'lime'))
+                    # 다른 속성도 복사
+                    for attr in ['stroke', 'stroke-width', 'opacity']:
+                        if svg_circle.get(attr):
+                            circle_elem.set(attr, svg_circle.get(attr))
+                except (ValueError, TypeError):
+                    continue
         
         # SVG 크기 조정 (타일 그리드에 맞게)
         try:

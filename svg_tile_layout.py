@@ -113,7 +113,11 @@ class TileLayoutCalculator:
                             'offset_y': -pos_info['offset_y']
                         }
                         homographies[(i, j)] = H
-                        homographies[(j, i)] = np.linalg.inv(H)
+                        try:
+                            homographies[(j, i)] = np.linalg.inv(H)
+                        except np.linalg.LinAlgError:
+                            # Singular matrix인 경우 역행렬 계산 건너뛰기
+                            pass
         
         # 첫 번째 이미지를 (0, 0)에 배치
         positions = {0: (0, 0)}
