@@ -41,6 +41,13 @@ output_*.jpg
 *.jpeg
 !m2/sample_*.svg
 
+# SVG panorama results
+panorama*.svg
+*_tiled*.svg
+*_vector*.svg
+*_final.svg
+*_full.svg
+
 # Model cache
 .cache/
 *.ckpt

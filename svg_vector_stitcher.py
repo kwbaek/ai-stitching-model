@@ -156,7 +156,7 @@ class SVGVectorStitcher:
             H = self.stitch_svg_pair(base_svg, svg_file)
             
             if H is None:
-                # 매칭 실패 시 간단한 오프셋으로 배치
+                # 매칭 실패 시 타일 위치에 직접 배치
                 offset_x = col * img_width
                 offset_y = row * img_height
                 
@@ -165,6 +165,7 @@ class SVGVectorStitcher:
                     coords = path_info['coords']
                     if len(coords) > 0:
                         coords_array = np.array(coords, dtype=np.float32)
+                        # 타일 위치에 맞게 오프셋 적용
                         coords_array[:, 0] += offset_x
                         coords_array[:, 1] += offset_y
                         
@@ -192,9 +193,11 @@ class SVGVectorStitcher:
                     # 타일 위치에 맞는 오프셋 적용
                     # 기준 이미지의 위치를 고려하여 계산
                     base_row, base_col = positions.get(0, (0, 0))
-                    offset_x = (col - base_col) * img_width
-                    offset_y = (row - base_row) * img_height
+                    # 타일 그리드에 맞게 오프셋 계산
+                    offset_x = col * img_width
+                    offset_y = row * img_height
                     
+                    # 변환된 좌표에 타일 오프셋 추가
                     transformed_coords[:, 0] += offset_x
                     transformed_coords[:, 1] += offset_y
                     
