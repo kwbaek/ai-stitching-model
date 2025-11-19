@@ -11,9 +11,15 @@ from image_aligner import ImageAligner
 class TileLayoutCalculator:
     """2D 타일 레이아웃 계산 클래스"""
     
-    def __init__(self):
-        self.matcher = VectorFeatureMatcher(use_transformer=False)
-        self.aligner = ImageAligner()
+    def __init__(self, matcher=None, aligner=None):
+        if matcher is None:
+            self.matcher = VectorFeatureMatcher(use_transformer=False)
+        else:
+            self.matcher = matcher
+        if aligner is None:
+            self.aligner = ImageAligner()
+        else:
+            self.aligner = aligner
         self.extractor = SVGPathExtractor()
     
     def analyze_relative_position(self, svg1_path: str, svg2_path: str, 
@@ -78,7 +84,7 @@ class TileLayoutCalculator:
             'offset_y': offset_y
         }
     
-    def compute_tile_positions(self, svg_files: List[str]) -> Dict[int, Tuple[int, int]]:
+    def compute_tile_positions(self, svg_files: List[str]) -> Tuple[Dict[int, Tuple[int, int]], Dict[Tuple[int, int], np.ndarray]]:
         """
         이미지들의 2D 타일 위치 계산
         
@@ -86,11 +92,13 @@ class TileLayoutCalculator:
             svg_files: SVG 파일 경로 리스트
             
         Returns:
-            {이미지 인덱스: (row, col)} 딕셔너리
+            (positions, homographies) 튜플
+            - positions: {이미지 인덱스: (row, col)} 딕셔너리
+            - homographies: {(i, j): 호모그래피 행렬} 딕셔너리
         """
         n = len(svg_files)
         if n <= 1:
-            return {0: (0, 0)}
+            return {0: (0, 0)}, {}
         
         # 모든 이미지 쌍 간의 관계 분석
         relationships = {}
@@ -176,18 +184,27 @@ class TileLayoutCalculator:
                 visited.add(j)
                 queue.append(j)
         
-        # 모든 이미지를 정사각형 그리드로 배치
+        # 방문하지 않은 이미지가 있으면 나머지도 배치
+        for idx in range(n):
+            if idx not in visited:
+                # 모든 위치가 차있으면 순차 배치
+                max_col = max([p[1] for p in positions.values()]) if positions else 0
+                max_row = max([p[0] for p in positions.values()]) if positions else 0
+                # 다음 행의 첫 번째 열에 배치
+                positions[idx] = (max_row + 1, 0)
+                visited.add(idx)
+        
+        # 정사각형 그리드로 재배치 (계산된 관계 무시하고 단순 그리드)
         import math
         grid_size = int(math.ceil(math.sqrt(n)))
         
-        # 모든 이미지를 정사각형 그리드에 배치
         new_positions = {}
         for idx in range(n):
             row = idx // grid_size
             col = idx % grid_size
             new_positions[idx] = (row, col)
         
-        return new_positions
+        return new_positions, homographies
     
     def _reverse_direction(self, direction: str) -> str:
         """방향 반전"""
