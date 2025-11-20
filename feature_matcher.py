@@ -1,6 +1,6 @@
 """
 딥러닝 기반 특징점 추출 및 매칭 모듈
-SuperPoint + SuperGlue 또는 LoFTR 사용
+LoFTR, DISK, LightGlue, DINOv2 등 지원
 """
 import torch
 import torch.nn.functional as F
@@ -11,6 +11,23 @@ import kornia as K
 from kornia.feature import LoFTR, DISK
 from kornia.utils import image_to_tensor
 
+# Optional: LightGlue (더 빠르고 정확한 매칭)
+try:
+    from lightglue import LightGlue, SuperPoint, DISK as LightGlueDISK
+    from lightglue.utils import load_image, rbd
+    LIGHTGLUE_AVAILABLE = True
+except ImportError:
+    LIGHTGLUE_AVAILABLE = False
+    print("LightGlue not available. Install with: pip install lightglue")
+
+# Optional: DINOv2 (강력한 특징 추출)
+try:
+    from transformers import AutoImageProcessor, AutoModel
+    DINOV2_AVAILABLE = True
+except ImportError:
+    DINOV2_AVAILABLE = False
+    print("DINOv2 not available. Install with: pip install transformers")
+
 
 class DeepFeatureMatcher:
     """딥러닝 기반 특징점 매칭 클래스"""
@@ -18,7 +35,7 @@ class DeepFeatureMatcher:
     def __init__(self, method: str = 'loftr', device: str = None):
         """
         Args:
-            method: 'loftr' 또는 'superpoint_superglue'
+            method: 'loftr', 'disk', 'lightglue', 'lightglue_disk', 'dinov2'
             device: 'cuda' 또는 'cpu'
         """
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
@@ -26,10 +43,27 @@ class DeepFeatureMatcher:
         
         if method == 'loftr':
             self.model = LoFTR(pretrained='outdoor').to(self.device).eval()
+            self.extractor = None
         elif method == 'disk':
             self.model = DISK.from_pretrained('depth').to(self.device).eval()
+            self.extractor = None
+        elif method == 'lightglue' and LIGHTGLUE_AVAILABLE:
+            self.extractor = SuperPoint(max_num_keypoints=2048).eval().to(self.device)
+            self.model = LightGlue(features='superpoint').eval().to(self.device)
+        elif method == 'lightglue_disk' and LIGHTGLUE_AVAILABLE:
+            self.extractor = LightGlueDISK(max_num_keypoints=2048).eval().to(self.device)
+            self.model = LightGlue(features='disk').eval().to(self.device)
+        elif method == 'dinov2' and DINOV2_AVAILABLE:
+            self.processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
+            self.model = AutoModel.from_pretrained('facebook/dinov2-base').to(self.device).eval()
+            self.extractor = None
         else:
-            raise ValueError(f"Unknown method: {method}")
+            available_methods = ['loftr', 'disk']
+            if LIGHTGLUE_AVAILABLE:
+                available_methods.extend(['lightglue', 'lightglue_disk'])
+            if DINOV2_AVAILABLE:
+                available_methods.append('dinov2')
+            raise ValueError(f"Unknown method: {method}. Available: {available_methods}")
     
     def preprocess_image(self, image: np.ndarray) -> torch.Tensor:
         """이미지를 모델 입력 형식으로 전처리"""
@@ -72,39 +106,128 @@ class DeepFeatureMatcher:
         Returns:
             매칭 결과 딕셔너리
         """
-        # 이미지 전처리 (이미 (1, H, W) 형태)
-        img1_tensor = self.preprocess_image(img1)  # (1, H, W)
-        img2_tensor = self.preprocess_image(img2)  # (1, H, W)
-        
-        # 배치 차원 추가하여 (B, 1, H, W) 형태로
-        img1_batch = img1_tensor.unsqueeze(0)  # (1, 1, H, W)
-        img2_batch = img2_tensor.unsqueeze(0)  # (1, 1, H, W)
-        
         with torch.no_grad():
-            if self.method == 'loftr':
-                # LoFTR 매칭
-                input_dict = {
-                    'image0': img1_batch,
-                    'image1': img2_batch
-                }
-                correspondences = self.model(input_dict)
+            if self.method in ['lightglue', 'lightglue_disk'] and LIGHTGLUE_AVAILABLE:
+                # LightGlue 매칭 (더 빠르고 정확함)
+                # 이미지를 PIL Image로 변환
+                from PIL import Image
+                if isinstance(img1, np.ndarray):
+                    img1_pil = Image.fromarray(cv2.cvtColor(img1, cv2.COLOR_BGR2RGB) if len(img1.shape) == 3 else img1)
+                    img2_pil = Image.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB) if len(img2.shape) == 3 else img2)
+                else:
+                    img1_pil, img2_pil = img1, img2
+                
+                # 이미지 로드 및 전처리
+                image0 = load_image(img1_pil).to(self.device)
+                image1 = load_image(img2_pil).to(self.device)
+                
+                # 특징점 추출
+                feats0 = self.extractor.extract(image0)
+                feats1 = self.extractor.extract(image1)
+                
+                # 매칭
+                matches01 = self.model({'image0': feats0, 'image1': feats1})
                 
                 # 매칭점 추출
-                mkpts0 = correspondences['mkpts0_f'].cpu().numpy()
-                mkpts1 = correspondences['mkpts1_f'].cpu().numpy()
-                mconf = correspondences['mconf'].cpu().numpy()
+                mkpts0 = feats0['keypoints'][matches01['matches'][:, 0]].cpu().numpy()
+                mkpts1 = feats1['keypoints'][matches01['matches'][:, 1]].cpu().numpy()
+                mconf = matches01['match_confidence'].cpu().numpy()
                 
-            elif self.method == 'disk':
-                # DISK 특징점 추출 및 매칭
-                features1 = self.model(img1_batch)
-                features2 = self.model(img2_batch)
+            elif self.method == 'dinov2' and DINOV2_AVAILABLE:
+                # DINOv2 특징 추출 및 매칭
+                from PIL import Image
+                if isinstance(img1, np.ndarray):
+                    img1_pil = Image.fromarray(cv2.cvtColor(img1, cv2.COLOR_BGR2RGB) if len(img1.shape) == 3 else img1)
+                    img2_pil = Image.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB) if len(img2.shape) == 3 else img2)
+                else:
+                    img1_pil, img2_pil = img1, img2
                 
-                # 특징점 매칭
-                matches = self.model.match(features1, features2)
+                # 특징 추출
+                inputs1 = self.processor(images=img1_pil, return_tensors="pt").to(self.device)
+                inputs2 = self.processor(images=img2_pil, return_tensors="pt").to(self.device)
                 
-                mkpts0 = matches['keypoints0'].cpu().numpy()
-                mkpts1 = matches['keypoints1'].cpu().numpy()
-                mconf = matches['confidence'].cpu().numpy()
+                outputs1 = self.model(**inputs1)
+                outputs2 = self.model(**inputs2)
+                
+                # 패치 특징 추출 (평균 풀링)
+                feat1 = outputs1.last_hidden_state.mean(dim=1).cpu().numpy()
+                feat2 = outputs2.last_hidden_state.mean(dim=1).cpu().numpy()
+                
+                # 간단한 매칭 (코사인 유사도)
+                from scipy.spatial.distance import cdist
+                distances = cdist(feat1, feat2, metric='cosine')
+                matches = np.argmin(distances, axis=1)
+                
+                # 그리드 좌표 생성 (DINOv2는 패치 기반)
+                h1, w1 = img1.shape[:2]
+                h2, w2 = img2.shape[:2]
+                patch_size = 14  # DINOv2 base patch size
+                
+                # 간단한 그리드 매칭 (실제로는 더 정교한 방법 필요)
+                mkpts0 = []
+                mkpts1 = []
+                mconf = []
+                
+                for i, j in enumerate(matches):
+                    if distances[i, j] < 0.5:  # 유사도 임계값
+                        # 패치 위치를 픽셀 좌표로 변환
+                        patch_h1 = i // (w1 // patch_size)
+                        patch_w1 = i % (w1 // patch_size)
+                        patch_h2 = j // (w2 // patch_size)
+                        patch_w2 = j % (w2 // patch_size)
+                        
+                        mkpts0.append([patch_w1 * patch_size, patch_h1 * patch_size])
+                        mkpts1.append([patch_w2 * patch_size, patch_h2 * patch_size])
+                        mconf.append(1.0 - distances[i, j])
+                
+                mkpts0 = np.array(mkpts0) if mkpts0 else np.array([])
+                mkpts1 = np.array(mkpts1) if mkpts1 else np.array([])
+                mconf = np.array(mconf) if mconf else np.array([])
+                
+            else:
+                # 기존 LoFTR/DISK 방식
+                # 이미지 전처리 (이미 (1, H, W) 형태)
+                img1_tensor = self.preprocess_image(img1)  # (1, H, W)
+                img2_tensor = self.preprocess_image(img2)  # (1, H, W)
+                
+                # 배치 차원 추가하여 (B, 1, H, W) 형태로
+                img1_batch = img1_tensor.unsqueeze(0)  # (1, 1, H, W)
+                img2_batch = img2_tensor.unsqueeze(0)  # (1, 1, H, W)
+                
+                if self.method == 'loftr':
+                    # LoFTR 매칭
+                    input_dict = {
+                        'image0': img1_batch,
+                        'image1': img2_batch
+                    }
+                    correspondences = self.model(input_dict)
+                    
+                    # 매칭점 추출
+                    if 'mkpts0_f' in correspondences:
+                        mkpts0 = correspondences['mkpts0_f'].cpu().numpy()
+                        mkpts1 = correspondences['mkpts1_f'].cpu().numpy()
+                        mconf = correspondences['mconf'].cpu().numpy()
+                    elif 'keypoints0' in correspondences:
+                        mkpts0 = correspondences['keypoints0'].cpu().numpy()
+                        mkpts1 = correspondences['keypoints1'].cpu().numpy()
+                        mconf = correspondences['confidence'].cpu().numpy()
+                    else:
+                        print(f"Warning: LoFTR output keys: {correspondences.keys()}")
+                        mkpts0 = np.array([])
+                        mkpts1 = np.array([])
+                        mconf = np.array([])
+                    
+                elif self.method == 'disk':
+                    # DISK 특징점 추출 및 매칭
+                    features1 = self.model(img1_batch)
+                    features2 = self.model(img2_batch)
+                    
+                    # 특징점 매칭
+                    matches = self.model.match(features1, features2)
+                    
+                    mkpts0 = matches['keypoints0'].cpu().numpy()
+                    mkpts1 = matches['keypoints1'].cpu().numpy()
+                    mconf = matches['confidence'].cpu().numpy()
         
         return {
             'keypoints0': mkpts0,

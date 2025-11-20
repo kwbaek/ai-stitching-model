@@ -36,6 +36,7 @@ class ImageAligner:
             return None
         
         if self.method == 'homography':
+            # 호모그래피 계산 (위치 계산용, 경로 변환에는 사용하지 않음)
             H, mask = cv2.findHomography(
                 pts1, pts2,
                 method=cv2.RANSAC,

@@ -29,6 +29,30 @@ def main():
         default=None,
         help='최대 이미지 수 (테스트용)'
     )
+    parser.add_argument(
+        '--use_gnn',
+        action='store_true',
+        help='Graph Neural Network 기반 매칭 사용'
+    )
+    parser.add_argument(
+        '--use_transformer',
+        action='store_true',
+        help='Transformer 기반 벡터 매칭 사용'
+    )
+    parser.add_argument(
+        '--raster_method',
+        type=str,
+        default='loftr',
+        choices=['loftr', 'disk', 'lightglue', 'lightglue_disk', 'dinov2'],
+        help='래스터 기반 딥러닝 매칭 방법 (기본값: loftr)'
+    )
+    parser.add_argument(
+        '--no_raster',
+        dest='use_raster',
+        action='store_false',
+        default=True,
+        help='래스터 기반 매칭 비활성화 (벡터 매칭 사용)'
+    )
     
     args = parser.parse_args()
     
@@ -50,8 +74,14 @@ def main():
     
     print(f"Found {len(svg_files)} SVG files")
     
-    # 스티처 생성
-    stitcher = SVGVectorStitcher()
+    # 스티처 생성 (래스터 기반 딥러닝 매칭 사용, 권장) ⭐
+    stitcher = SVGVectorStitcher(
+        use_transformer=args.use_transformer,
+        use_gnn=args.use_gnn,
+        use_overlap_detection=True,
+        use_raster_matching=args.use_raster,
+        raster_method=args.raster_method
+    )
     
     try:
         # 파노라마 SVG 생성

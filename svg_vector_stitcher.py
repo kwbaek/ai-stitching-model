@@ -11,6 +11,9 @@ from svg_vector_analyzer import VectorFeatureMatcher, SVGPathExtractor
 from image_aligner import ImageAligner
 from svg_tile_layout import TileLayoutCalculator
 from svg_overlap_detector import OverlapDetector
+from svg_converter import SVGConverter
+from feature_matcher import DeepFeatureMatcher, TraditionalFeatureMatcher
+from vector_refinement import VectorRefiner
 try:
     from transformer_vector_matcher import TransformerVectorMatcher
     TRANSFORMER_AVAILABLE = True
@@ -18,24 +21,59 @@ except ImportError:
     TRANSFORMER_AVAILABLE = False
     print("Warning: TransformerVectorMatcher not available")
 
+try:
+    from graph_vector_matcher import GraphVectorMatcher
+    GNN_AVAILABLE = True
+except ImportError:
+    GNN_AVAILABLE = False
+    print("Warning: GraphVectorMatcher not available (torch-geometric required)")
+
 
 class SVGVectorStitcher:
     """SVG 벡터 데이터 직접 스티칭 클래스"""
     
-    def __init__(self, use_transformer: bool = False, 
+    def __init__(self, use_transformer: bool = False,
+                 use_gnn: bool = False,
                  use_overlap_detection: bool = True,
-                 layout_mode: str = 'auto'):
+                 layout_mode: str = 'auto',
+                 use_raster_matching: bool = True,
+                 raster_method: str = 'loftr'):
         """
         Args:
-            use_transformer: 트랜스포머 기반 매칭 사용 여부
+            use_transformer: 트랜스포머 기반 벡터 매칭 사용 여부
+            use_gnn: Graph Neural Network 기반 벡터 매칭 사용 여부
             use_overlap_detection: 겹침 감지 사용 여부
             layout_mode: 레이아웃 모드 ('auto', 'horizontal', 'vertical', 'grid')
+            use_raster_matching: 래스터 기반 딥러닝 매칭 사용 (권장) ⭐
+            raster_method: 래스터 매칭 방법 ('loftr', 'disk', 'lightglue', 'lightglue_disk', 'dinov2')
         """
         self.use_transformer = use_transformer and TRANSFORMER_AVAILABLE
+        self.use_gnn = use_gnn and GNN_AVAILABLE
         self.use_overlap_detection = use_overlap_detection
         self.layout_mode = layout_mode
+        self.use_raster_matching = use_raster_matching
+        self.raster_method = raster_method
         
-        # 기본 매처
+        # SVG → 래스터 변환기 (메모리 절약을 위해 크기 조정)
+        # 원본 크기 유지하되, 딥러닝 매칭용으로는 작은 크기 사용
+        # LoFTR 등 트랜스포머 모델은 메모리 사용량이 크므로 해상도를 낮춤 (1024px 수준)
+        self.converter = SVGConverter(output_size=(1024, 884))  # 1/4 크기 (메모리 최적화)
+        self.refiner = VectorRefiner()
+        self.full_size_converter = SVGConverter(output_size=(4096, 3536))  # 최종 출력용
+        
+        # 래스터 기반 딥러닝 매처 (권장) ⭐
+        if use_raster_matching:
+            try:
+                self.raster_matcher = DeepFeatureMatcher(method=raster_method)
+                print(f"Using raster-based deep learning matching: {raster_method}")
+            except Exception as e:
+                print(f"Warning: Failed to initialize {raster_method}, falling back to vector matching")
+                self.raster_matcher = None
+                use_raster_matching = False
+        else:
+            self.raster_matcher = None
+        
+        # 벡터 기반 매처 (fallback)
         self.matcher = VectorFeatureMatcher(use_transformer=False)
         self.aligner = ImageAligner()
         self.extractor = SVGPathExtractor()
@@ -45,12 +83,19 @@ class SVGVectorStitcher:
         if use_overlap_detection:
             self.overlap_detector = OverlapDetector(overlap_threshold=0.1)
         
-        # 트랜스포머 매처
+        # 트랜스포머 매처 (벡터용)
         if self.use_transformer:
             self.transformer_matcher = TransformerVectorMatcher()
-            print("Using transformer-based vector matching")
+            print("Using transformer-based vector matching (fallback)")
         else:
             self.transformer_matcher = None
+        
+        # GNN 매처 (벡터용)
+        if self.use_gnn:
+            self.gnn_matcher = GraphVectorMatcher()
+            print("Using Graph Neural Network-based vector matching (fallback)")
+        else:
+            self.gnn_matcher = None
     
     def apply_transform_to_svg(self, svg_path: str, transform_matrix: np.ndarray,
                               output_path: str, offset: Tuple[float, float] = (0, 0)):
@@ -116,8 +161,10 @@ class SVGVectorStitcher:
         Returns:
             호모그래피 행렬 또는 None
         """
-        # 트랜스포머 매칭 사용
-        if self.use_transformer and self.transformer_matcher:
+        # 매칭 방법 선택 (우선순위: GNN > Transformer > 기본)
+        if self.use_gnn and self.gnn_matcher:
+            matches = self.gnn_matcher.match_graphs(svg1_path, svg2_path)
+        elif self.use_transformer and self.transformer_matcher:
             matches = self.transformer_matcher.match_vectors(svg1_path, svg2_path)
         else:
             # 기본 벡터 특징 매칭
@@ -182,25 +229,126 @@ class SVGVectorStitcher:
         if len(svg_files) < 1:
             return False
         
-        # 연속적인 이미지들 간의 호모그래피를 계산하여 누적 변환 적용
-        print("Computing sequential homography-based panorama alignment...")
+        # 모든 이미지 쌍 간의 호모그래피 계산 (상하좌우 모든 방향)
+        print("Computing 2D grid layout with all-directional relationships...")
         
-        # 인접한 이미지들 간의 호모그래피 계산
-        pairwise_homographies = {}
-        for i in range(len(svg_files) - 1):
-            matches = self.matcher.match_vector_features(svg_files[i], svg_files[i + 1])
-            if matches['num_matches'] >= 4:
-                H = self.aligner.compute_homography(matches)
-                if H is not None:
-                    pairwise_homographies[i] = H  # i -> i+1 변환
-                    print(f"  Image {i+1} -> {i+2}: {matches['num_matches']} matches, homography computed")
+        # 모든 이미지 쌍 간의 호모그래피 계산
+        all_homographies = {}
+        relationships = {}  # {(i, j): {'direction': 'right'|'left'|'up'|'down', 'offset_x': float, 'offset_y': float}}
+        
+        n = len(svg_files)
+        print(f"Analyzing relationships between {n} images...")
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                # 래스터 기반 딥러닝 매칭 사용 (권장) ⭐
+                if self.use_raster_matching and self.raster_matcher:
+                    try:
+                        # SVG를 래스터로 변환 (메모리 절약을 위해 작은 크기)
+                        img1 = self.converter.svg_to_image(svg_files[i])
+                        img2 = self.converter.svg_to_image(svg_files[j])
+                        
+                        # 딥러닝 모델로 매칭
+                        matches = self.raster_matcher.match_features(img1, img2)
+                        
+                        # 메모리 해제
+                        del img1, img2
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        
+                        # 매칭점이 충분하면 호모그래피 계산 (위치 계산용)
+                        if matches['num_matches'] >= 10:  # 최소 10개 매칭점
+                            H_low = self.aligner.compute_homography(matches)
+                            if H_low is not None:
+                                # 호모그래피 스케일링 (Low Res -> High Res)
+                                # S @ H_low @ inv(S)
+                                scale_x = self.full_size_converter.output_size[0] / self.converter.output_size[0]
+                                scale_y = self.full_size_converter.output_size[1] / self.converter.output_size[1]
+                                
+                                S = np.diag([scale_x, scale_y, 1.0])
+                                S_inv = np.diag([1.0/scale_x, 1.0/scale_y, 1.0])
+                                
+                                H = S @ H_low @ S_inv
+                                
+                                # [NEW] 벡터 기반 정밀 보정 (Refinement)
+                                try:
+                                    print(f"    Refining alignment for {i+1}<->{j+1}...")
+                                    H = self.refiner.refine_alignment(svg_files[i], svg_files[j], H, max_distance=50.0, translation_only=True)
+                                except Exception as e:
+                                    print(f"    Warning: Refinement failed: {e}")
+                                
+                                all_homographies[(i, j)] = H
+                                try:
+                                    all_homographies[(j, i)] = np.linalg.inv(H)
+                                except np.linalg.LinAlgError:
+                                    pass
+                                
+                                relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
+                                relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
+                                
+                                print(f"  Image {i+1} <-> {j+1}: {matches['num_matches']} matches ({self.raster_method})")
+                        elif matches['num_matches'] >= 4:
+                            # 매칭점이 적어도 시도는 해봄
+                            H_low = self.aligner.compute_homography(matches)
+                            if H_low is not None:
+                                # 호모그래피 스케일링
+                                scale_x = self.full_size_converter.output_size[0] / self.converter.output_size[0]
+                                scale_y = self.full_size_converter.output_size[1] / self.converter.output_size[1]
+                                
+                                S = np.diag([scale_x, scale_y, 1.0])
+                                S_inv = np.diag([1.0/scale_x, 1.0/scale_y, 1.0])
+                                
+                                H = S @ H_low @ S_inv
+                                
+                                # [NEW] 벡터 기반 정밀 보정 (Refinement)
+                                try:
+                                    print(f"    Refining alignment for {i+1}<->{j+1}...")
+                                    H = self.refiner.refine_alignment(svg_files[i], svg_files[j], H, max_distance=50.0, translation_only=True)
+                                except Exception as e:
+                                    print(f"    Warning: Refinement failed: {e}")
+                                
+                                all_homographies[(i, j)] = H
+                                try:
+                                    all_homographies[(j, i)] = np.linalg.inv(H)
+                                except np.linalg.LinAlgError:
+                                    pass
+                                
+                                relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
+                                relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
+                                
+                                print(f"  Image {i+1} <-> {j+1}: {matches['num_matches']} matches (low quality, {self.raster_method})")
+                    except Exception as e:
+                        print(f"  Warning: Raster matching failed for {i+1}<->{j+1}: {e}, using vector matching")
+                        # Fallback to vector matching
+                        matches = self.matcher.match_vector_features(svg_files[i], svg_files[j])
+                        if matches['num_matches'] >= 4:
+                            H = self.aligner.compute_homography(matches)
+                            if H is not None:
+                                all_homographies[(i, j)] = H
+                                try:
+                                    all_homographies[(j, i)] = np.linalg.inv(H)
+                                except np.linalg.LinAlgError:
+                                    pass
+                                relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
+                                relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
                 else:
-                    print(f"  Image {i+1} -> {i+2}: Failed to compute homography")
-            else:
-                print(f"  Image {i+1} -> {i+2}: Only {matches['num_matches']} matches (need >= 4)")
-        
-        # 누적 변환 행렬 계산 (첫 번째 이미지 기준)
-        cumulative_homographies = {0: np.eye(3)}  # 첫 번째 이미지는 단위 행렬
+                    # 벡터 기반 매칭 (fallback)
+                    matches = self.matcher.match_vector_features(svg_files[i], svg_files[j])
+                    if matches['num_matches'] >= 4:
+                        H = self.aligner.compute_homography(matches)
+                        if H is not None:
+                            all_homographies[(i, j)] = H
+                            try:
+                                all_homographies[(j, i)] = np.linalg.inv(H)
+                            except np.linalg.LinAlgError:
+                                pass
+                            
+                            relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
+                            relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
+                            
+                            if matches['num_matches'] >= 10:
+                                print(f"  Image {i+1} <-> {j+1}: {matches['num_matches']} matches (vector)")
         
         # 첫 번째 이미지의 bbox로 이미지 크기 추정
         feat0 = self.matcher.extract_features(svg_files[0])
@@ -210,72 +358,242 @@ class SVGVectorStitcher:
             img_width = int(feat0['bbox']['max_x'] - feat0['bbox']['min_x'])
             img_height = int(feat0['bbox']['max_y'] - feat0['bbox']['min_y'])
         
-        # 각 이미지의 위치 오프셋 계산 (호모그래피로 상대 위치 계산, 하지만 이미지 자체는 변형 없음)
-        image_offsets = {0: (0, 0)}  # 첫 번째 이미지는 (0, 0)
+        # 상대 위치 분석 (이미지 크기 정보 필요)
+        analyzed_relationships = {}
+        for (i, j), rel_data in relationships.items():
+            if rel_data.get('homography') is not None:
+                rel_info = self._analyze_relative_position(svg_files[i], svg_files[j], rel_data['homography'], img_width, img_height)
+                analyzed_relationships[(i, j)] = rel_info
         
-        for i in range(1, len(svg_files)):
-            if (i - 1) in pairwise_homographies:
-                # 이전 이미지에서 현재 이미지로의 호모그래피
-                H_prev_to_curr = pairwise_homographies[i - 1]
+        # 2D 그리드 위치 계산
+        print("Computing 2D grid positions...")
+        grid_positions = self._compute_grid_positions(n, analyzed_relationships)
+        
+        print(f"Grid layout: {len(set(grid_positions.values()))} unique positions")
+        
+        # 그리드 기반 배치: 각 이미지의 위치 계산
+        image_offsets = {}  # {idx: (x, y)}
+        image_transforms = {}  # {idx: transform_matrix}
+        
+        # 목표: 약 10% 겹침
+        target_overlap_ratio = 0.1
+        target_overlap = img_width * target_overlap_ratio
+        
+        # 순차적 스티칭: 첫 번째 이미지를 기준으로 가장 가까운 이미지부터 순차적으로 배치
+        # 첫 번째 이미지를 (0, 0)에 배치
+        image_offsets[0] = (0, 0)
+        image_transforms[0] = np.eye(3)
+        
+        # 이미지 간 거리 계산 (매칭 점 수 기반)
+        image_distances = {}
+        for (i, j), rel_data in relationships.items():
+            if rel_data.get('homography') is not None:
+                matches_count = rel_data.get('matches', 0)
+                # 거리 = 1 / (매칭 점 수 + 1) - 매칭이 많을수록 가까움
+                distance = 1.0 / (matches_count + 1)
+                image_distances[(i, j)] = distance
+                image_distances[(j, i)] = distance
+        
+        # BFS로 그리드를 순회하며 위치 계산 (가장 가까운 이미지부터)
+        visited = {0}
+        queue = [0]
+        
+        while queue:
+            current_idx = queue.pop(0)
+            current_row, current_col = grid_positions[current_idx]
+            current_offset_x, current_offset_y = image_offsets[current_idx]
+            current_transform = image_transforms[current_idx]
+            
+            # 상하좌우 이웃 찾기
+            neighbors = [
+                (1, 0, 'right'),   # 오른쪽
+                (-1, 0, 'left'),   # 왼쪽
+                (0, 1, 'down'),    # 아래
+                (0, -1, 'up')      # 위
+            ]
+            
+            for dr, dc, direction in neighbors:
+                neighbor_row = current_row + dr
+                neighbor_col = current_col + dc
                 
-                # 이전 이미지의 중심점을 현재 이미지 좌표계로 변환
-                prev_center = np.array([[img_width/2, img_height/2, 1]], dtype=np.float32).T
-                prev_center_in_curr = H_prev_to_curr @ prev_center
-                prev_center_in_curr = prev_center_in_curr / prev_center_in_curr[2, 0]
+                # 이 위치에 있는 이미지 찾기
+                neighbor_idx = None
+                for idx, (row, col) in grid_positions.items():
+                    if row == neighbor_row and col == neighbor_col and idx not in visited:
+                        neighbor_idx = idx
+                        break
                 
-                # 현재 이미지의 중심점
-                curr_center = np.array([img_width/2, img_height/2])
+                if neighbor_idx is None:
+                    continue
                 
-                # 상대적 위치 차이 계산
-                relative_offset_x = prev_center_in_curr[0, 0] - curr_center[0]
-                relative_offset_y = prev_center_in_curr[1, 0] - curr_center[1]
-                
-                # 이전 이미지의 오른쪽 가장자리를 현재 이미지 좌표계로 변환하여 겹침 확인
-                prev_right_edge = np.array([[img_width, img_height/2, 1]], dtype=np.float32).T
-                prev_right_in_curr = H_prev_to_curr @ prev_right_edge
-                prev_right_in_curr = prev_right_in_curr / prev_right_in_curr[2, 0]
-                
-                # 현재 이미지의 왼쪽 가장자리 (x=0)
-                overlap_amount = prev_right_in_curr[0, 0] - 0
-                
-                # 목표: 약 10% 겹침 (img_width * 0.1)
-                target_overlap = img_width * 0.1
-                
-                # 누적 오프셋 계산 (이전 이미지의 오프셋 + 상대적 위치 차이)
-                prev_offset_x, prev_offset_y = image_offsets[i - 1]
-                
-                # 겹침을 고려한 오프셋 조정
-                if overlap_amount > img_width * 0.2:
-                    # 겹침이 너무 크면 오른쪽으로 이동
-                    offset_x = prev_offset_x + img_width - target_overlap
-                elif overlap_amount < 0:
-                    # 겹침이 없으면 약간 겹치도록
-                    offset_x = prev_offset_x + img_width - target_overlap
+                # 호모그래피 가져오기
+                if (current_idx, neighbor_idx) in all_homographies:
+                    H = all_homographies[(current_idx, neighbor_idx)]
+                elif (neighbor_idx, current_idx) in all_homographies:
+                    try:
+                        H = np.linalg.inv(all_homographies[(neighbor_idx, current_idx)])
+                    except np.linalg.LinAlgError:
+                        continue
                 else:
-                    # 적절한 겹침이면 상대적 위치 사용
-                    offset_x = prev_offset_x + relative_offset_x + (img_width - overlap_amount)
+                    continue
                 
-                # Y축은 상대적 위치 사용 (수직 정렬)
-                offset_y = prev_offset_y + relative_offset_y
+                # 방향에 따라 오프셋 계산
+                if direction == 'right':
+                    # 현재 이미지의 오른쪽 가장자리
+                    prev_right = current_transform @ np.array([[img_width], [img_height/2], [1]], dtype=np.float32)
+                    prev_right = prev_right / prev_right[2, 0]
+                    prev_right_x = prev_right[0, 0]
+                    prev_right_y = prev_right[1, 0]
+                    
+                    # 이웃 이미지의 왼쪽 가장자리를 현재 이미지 좌표계로 변환
+                    try:
+                        H_neighbor_to_current = np.linalg.inv(H)
+                    except np.linalg.LinAlgError:
+                        H_neighbor_to_current = np.eye(3)
+                    
+                    neighbor_left = H_neighbor_to_current @ np.array([[0], [img_height/2], [1]], dtype=np.float32)
+                    neighbor_left = neighbor_left / neighbor_left[2, 0]
+                    
+                    # 목표: 이웃 이미지의 왼쪽이 현재 이미지의 오른쪽에서 target_overlap만큼 왼쪽에 위치
+                    target_left_x = prev_right_x - target_overlap
+                    
+                    # Y축은 호모그래피로 계산한 상대적 위치 사용
+                    prev_center = current_transform @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    prev_center = prev_center / prev_center[2, 0]
+                    
+                    neighbor_center_in_current = H_neighbor_to_current @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    neighbor_center_in_current = neighbor_center_in_current / neighbor_center_in_current[2, 0]
+                    
+                    relative_offset_y = neighbor_center_in_current[1, 0] - img_height/2
+                    target_center_y = prev_center[1, 0] + relative_offset_y
+                    
+                    neighbor_offset_x = target_left_x
+                    neighbor_offset_y = target_center_y - img_height / 2
+                    
+                elif direction == 'left':
+                    # 현재 이미지의 왼쪽 가장자리
+                    prev_left = current_transform @ np.array([[0], [img_height/2], [1]], dtype=np.float32)
+                    prev_left = prev_left / prev_left[2, 0]
+                    prev_left_x = prev_left[0, 0]
+                    
+                    # 이웃 이미지의 오른쪽 가장자리를 현재 이미지 좌표계로 변환
+                    neighbor_right = H @ np.array([[img_width], [img_height/2], [1]], dtype=np.float32)
+                    neighbor_right = neighbor_right / neighbor_right[2, 0]
+                    
+                    # 목표: 이웃 이미지의 오른쪽이 현재 이미지의 왼쪽에서 target_overlap만큼 오른쪽에 위치
+                    target_right_x = prev_left_x + target_overlap
+                    
+                    # Y축은 호모그래피로 계산한 상대적 위치 사용
+                    prev_center = current_transform @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    prev_center = prev_center / prev_center[2, 0]
+                    
+                    neighbor_center_in_current = H @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    neighbor_center_in_current = neighbor_center_in_current / neighbor_center_in_current[2, 0]
+                    
+                    relative_offset_y = neighbor_center_in_current[1, 0] - img_height/2
+                    target_center_y = prev_center[1, 0] + relative_offset_y
+                    
+                    neighbor_offset_x = target_right_x - img_width
+                    neighbor_offset_y = target_center_y - img_height / 2
+                    
+                elif direction == 'down':
+                    # 현재 이미지의 아래 가장자리
+                    prev_bottom = current_transform @ np.array([[img_width/2], [img_height], [1]], dtype=np.float32)
+                    prev_bottom = prev_bottom / prev_bottom[2, 0]
+                    prev_bottom_y = prev_bottom[1, 0]
+                    
+                    # 이웃 이미지의 위 가장자리를 현재 이미지 좌표계로 변환
+                    try:
+                        H_neighbor_to_current = np.linalg.inv(H)
+                    except np.linalg.LinAlgError:
+                        H_neighbor_to_current = np.eye(3)
+                    
+                    neighbor_top = H_neighbor_to_current @ np.array([[img_width/2], [0], [1]], dtype=np.float32)
+                    neighbor_top = neighbor_top / neighbor_top[2, 0]
+                    
+                    # 목표: 이웃 이미지의 위가 현재 이미지의 아래에서 target_overlap만큼 위에 위치
+                    target_top_y = prev_bottom_y - target_overlap
+                    
+                    # X축은 호모그래피로 계산한 상대적 위치 사용
+                    prev_center = current_transform @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    prev_center = prev_center / prev_center[2, 0]
+                    
+                    neighbor_center_in_current = H_neighbor_to_current @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    neighbor_center_in_current = neighbor_center_in_current / neighbor_center_in_current[2, 0]
+                    
+                    relative_offset_x = neighbor_center_in_current[0, 0] - img_width/2
+                    target_center_x = prev_center[0, 0] + relative_offset_x
+                    
+                    neighbor_offset_x = target_center_x - img_width / 2
+                    neighbor_offset_y = target_top_y
+                    
+                elif direction == 'up':
+                    # 현재 이미지의 위 가장자리
+                    prev_top = current_transform @ np.array([[img_width/2], [0], [1]], dtype=np.float32)
+                    prev_top = prev_top / prev_top[2, 0]
+                    prev_top_y = prev_top[1, 0]
+                    
+                    # 이웃 이미지의 아래 가장자리를 현재 이미지 좌표계로 변환
+                    neighbor_bottom = H @ np.array([[img_width/2], [img_height], [1]], dtype=np.float32)
+                    neighbor_bottom = neighbor_bottom / neighbor_bottom[2, 0]
+                    
+                    # 목표: 이웃 이미지의 아래가 현재 이미지의 위에서 target_overlap만큼 아래에 위치
+                    target_bottom_y = prev_top_y + target_overlap
+                    
+                    # X축은 호모그래피로 계산한 상대적 위치 사용
+                    prev_center = current_transform @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    prev_center = prev_center / prev_center[2, 0]
+                    
+                    neighbor_center_in_current = H @ np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+                    neighbor_center_in_current = neighbor_center_in_current / neighbor_center_in_current[2, 0]
+                    
+                    relative_offset_x = neighbor_center_in_current[0, 0] - img_width/2
+                    target_center_x = prev_center[0, 0] + relative_offset_x
+                    
+                    neighbor_offset_x = target_center_x - img_width / 2
+                    neighbor_offset_y = target_bottom_y - img_height
                 
-                image_offsets[i] = (offset_x, offset_y)
-                print(f"  Image {i+1}: Offset ({offset_x:.1f}, {offset_y:.1f}), overlap: {overlap_amount/img_width*100:.1f}%")
-            else:
-                # 매칭 실패 시, 이전 이미지 옆에 배치
-                prev_offset_x, prev_offset_y = image_offsets[i - 1]
-                image_offsets[i] = (prev_offset_x + img_width * 0.9, prev_offset_y)  # 10% 겹침
-                print(f"  Image {i+1}: No match, placed next to previous")
+                # 이웃 이미지의 위치 저장 (translation만 사용, 원본 형태 유지)
+                image_offsets[neighbor_idx] = (neighbor_offset_x, neighbor_offset_y)
+                image_transforms[neighbor_idx] = np.array([
+                    [1, 0, neighbor_offset_x],
+                    [0, 1, neighbor_offset_y],
+                    [0, 0, 1]
+                ], dtype=np.float32)
+                
+                visited.add(neighbor_idx)
+                # 거리 순으로 정렬하여 큐에 추가 (가까운 이미지부터 처리)
+                queue.append(neighbor_idx)
+                # 큐를 거리 순으로 정렬 (현재 이미지와의 거리 기준)
+                queue.sort(key=lambda idx: image_distances.get((current_idx, idx), float('inf')))
+                
+                print(f"  Image {neighbor_idx+1} at ({neighbor_row}, {neighbor_col}): Offset ({neighbor_offset_x:.1f}, {neighbor_offset_y:.1f})")
+        
+        # 방문하지 않은 이미지가 있으면 기본 위치에 배치
+        for idx in range(n):
+            if idx not in visited:
+                row, col = grid_positions[idx]
+                # 그리드 위치에 따라 기본 오프셋 계산
+                offset_x = col * img_width * (1 - target_overlap_ratio)
+                offset_y = row * img_height * (1 - target_overlap_ratio)
+                image_offsets[idx] = (offset_x, offset_y)
+                image_transforms[idx] = np.array([
+                    [1, 0, offset_x],
+                    [0, 1, offset_y],
+                    [0, 0, 1]
+                ], dtype=np.float32)
+                print(f"  Image {idx+1} at ({row}, {col}): Default offset ({offset_x:.1f}, {offset_y:.1f})")
         
         # img_width, img_height는 이미 위에서 계산됨
         
-        # 모든 이미지의 위치를 계산하여 캔버스 크기 결정
+        # 모든 이미지의 위치를 계산하여 캔버스 크기 결정 (원본 형태 유지, translation만 적용)
         all_corners_x = [0, img_width]
         all_corners_y = [0, img_height]
         
-        for i, (offset_x, offset_y) in image_offsets.items():
-            # 이미지의 네 모서리 (오프셋만 적용, 변형 없음)
-            all_corners_x.extend([offset_x, offset_x + img_width])
-            all_corners_y.extend([offset_y, offset_y + img_height])
+        # 각 이미지의 네 모서리 (오프셋만 적용, 변형 없음)
+        for i, (offset_x_img, offset_y_img) in image_offsets.items():
+            all_corners_x.extend([offset_x_img, offset_x_img + img_width])
+            all_corners_y.extend([offset_y_img, offset_y_img + img_height])
         
         # 캔버스 크기 계산
         min_x = min(all_corners_x)
@@ -345,11 +663,11 @@ class SVGVectorStitcher:
         
         print(f"Image size: {img_width} x {img_height}")
         
-        # 각 이미지를 원본 그대로 배치 (변형 없이 오프셋만 적용)
+        # 각 이미지를 원본 형태 유지하며 배치 (호모그래피로 계산한 위치에 translation만 적용)
         for idx, svg_file in enumerate(svg_files):
             print(f"Placing SVG {idx+1}/{len(svg_files)}...")
             
-            # 이미지 오프셋 가져오기
+            # 이미지 오프셋 가져오기 (호모그래피로 계산한 위치)
             if idx in image_offsets:
                 img_offset_x, img_offset_y = image_offsets[idx]
                 base_offset_x = offset_x + img_offset_x
@@ -359,9 +677,10 @@ class SVGVectorStitcher:
                 base_offset_x = offset_x
                 base_offset_y = offset_y
             
-            # 파일명 표시 (디버깅용, 작게)
+            # 파일명 표시 (디버깅용)
             from pathlib import Path
             file_name = Path(svg_file).stem
+            
             text_elem = ET.SubElement(root, 'text')
             text_elem.set('x', str(base_offset_x + 20))
             text_elem.set('y', str(base_offset_y + 50))
@@ -390,12 +709,13 @@ class SVGVectorStitcher:
                 if not path_d:
                     continue
                 
-                # path d 문자열에서 좌표 추출 및 변환 (이미지 변형 없이 오프셋만 적용)
+                # 원본 형태 유지, translation만 적용 (호모그래피는 위치 계산에만 사용)
+                # path d 문자열에서 좌표 추출 및 변환 (단순 translation)
                 def replace_coords(match):
                     x = float(match.group(1))
                     y = float(match.group(2))
                     
-                    # 단순 오프셋만 적용 (이미지 자체는 변형 없음)
+                    # 원본 형태 유지, translation만 적용
                     x_new = x + base_offset_x
                     y_new = y + base_offset_y
                     
@@ -424,7 +744,7 @@ class SVGVectorStitcher:
                     r = svg_circle.get('r', '0')
                     fill = svg_circle.get('fill', 'red')
                     
-                    # 단순 오프셋만 적용 (이미지 자체는 변형 없음)
+                    # 원본 형태 유지, translation만 적용
                     cx_new = cx + base_offset_x
                     cy_new = cy + base_offset_y
                     
@@ -488,4 +808,159 @@ class SVGVectorStitcher:
         print(f"Panorama SVG saved to {output_path}")
         print(f"Canvas size: {canvas_width} x {canvas_height}")
         return True
+    
+    def _analyze_relative_position(self, svg1_path: str, svg2_path: str, 
+                                   H: np.ndarray, img_width: float, img_height: float) -> Dict:
+        """
+        두 이미지 간 상대적 위치 분석
+        
+        Args:
+            svg1_path: 첫 번째 SVG
+            svg2_path: 두 번째 SVG
+            H: 호모그래피 행렬 (svg1 -> svg2)
+            img_width: 이미지 너비
+            img_height: 이미지 높이
+            
+        Returns:
+            위치 정보 딕셔너리
+        """
+        # svg1의 중심점을 svg2 좌표계로 변환
+        center1 = np.array([[img_width/2], [img_height/2], [1]], dtype=np.float32)
+        center1_in_svg2 = H @ center1
+        center1_in_svg2 = center1_in_svg2 / center1_in_svg2[2, 0]
+        
+        # svg2의 중심점
+        center2 = np.array([img_width/2, img_height/2])
+        
+        # 상대적 위치 계산
+        offset_x = center1_in_svg2[0, 0] - center2[0]
+        offset_y = center1_in_svg2[1, 0] - center2[1]
+        
+        # 방향 결정
+        threshold = min(img_width, img_height) * 0.3
+        
+        if abs(offset_x) > abs(offset_y):
+            if offset_x > threshold:
+                direction = 'right'
+            elif offset_x < -threshold:
+                direction = 'left'
+            else:
+                direction = 'overlap'
+        else:
+            if offset_y > threshold:
+                direction = 'down'
+            elif offset_y < -threshold:
+                direction = 'up'
+            else:
+                direction = 'overlap'
+        
+        return {
+            'direction': direction,
+            'offset_x': offset_x,
+            'offset_y': offset_y
+        }
+    
+    def _compute_grid_positions(self, n: int, relationships: Dict) -> Dict[int, Tuple[int, int]]:
+        """
+        2D 그리드 위치 계산
+        
+        Args:
+            n: 이미지 개수
+            relationships: {(i, j): {'direction': str, ...}} 딕셔너리
+            
+        Returns:
+            {이미지 인덱스: (row, col)} 딕셔너리
+        """
+        if n <= 1:
+            return {0: (0, 0)}
+        
+        # 첫 번째 이미지를 (0, 0)에 배치
+        positions = {0: (0, 0)}
+        visited = {0}
+        
+        # BFS로 위치 계산
+        queue = [0]
+        
+        while queue:
+            current = queue.pop(0)
+            current_pos = positions[current]
+            
+            # 인접한 이미지 찾기
+            neighbors = []
+            for (i, j), rel_info in relationships.items():
+                if i == current and j not in visited:
+                    neighbors.append((j, rel_info))
+            
+            # 방향별로 정렬 (우선순위: right > down > left > up)
+            direction_priority = {'right': 0, 'down': 1, 'left': 2, 'up': 3}
+            neighbors.sort(key=lambda x: direction_priority.get(x[1].get('direction', 'unknown'), 4))
+            
+            for j, rel_info in neighbors:
+                direction = rel_info.get('direction', 'unknown')
+                
+                # 방향에 따라 위치 계산
+                if direction == 'right':
+                    new_pos = (current_pos[0], current_pos[1] + 1)
+                elif direction == 'left':
+                    new_pos = (current_pos[0], current_pos[1] - 1)
+                elif direction == 'down':
+                    new_pos = (current_pos[0] + 1, current_pos[1])
+                elif direction == 'up':
+                    new_pos = (current_pos[0] - 1, current_pos[1])
+                else:  # overlap or unknown
+                    # 겹치는 경우 오른쪽에 배치
+                    new_pos = (current_pos[0], current_pos[1] + 1)
+                
+                # 위치 충돌 확인 및 해결
+                if new_pos in positions.values():
+                    # 충돌 시 다른 위치 찾기
+                    row, col = new_pos
+                    # 주변 위치 시도
+                    for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, 1), (1, -1), (-1, -1)]:
+                        candidate_pos = (row + dr, col + dc)
+                        if candidate_pos not in positions.values():
+                            new_pos = candidate_pos
+                            break
+                    else:
+                        # 모든 주변 위치가 차있으면 순차적으로 배치
+                        max_col = max([p[1] for p in positions.values()]) if positions else 0
+                        new_pos = (row, max_col + 1)
+                
+                positions[j] = new_pos
+                visited.add(j)
+                queue.append(j)
+        
+        # 방문하지 않은 이미지가 있으면 나머지도 배치
+        for idx in range(n):
+            if idx not in visited:
+                # 모든 위치가 차있으면 순차 배치
+                max_col = max([p[1] for p in positions.values()]) if positions else 0
+                max_row = max([p[0] for p in positions.values()]) if positions else 0
+                # 다음 행의 첫 번째 열에 배치
+                positions[idx] = (max_row + 1, 0)
+                visited.add(idx)
+        
+        # 정사각형 그리드로 재배치 (계산된 관계 무시하고 단순 그리드)
+        import math
+        grid_size = int(math.ceil(math.sqrt(n)))
+        
+        new_positions = {}
+        for idx in range(n):
+            row = idx // grid_size
+            col = idx % grid_size
+            new_positions[idx] = (row, col)
+        
+        return new_positions
+    
+    def _reverse_direction(self, direction: str) -> str:
+        """방향 반전"""
+        mapping = {
+            'right': 'left',
+            'left': 'right',
+            'up': 'down',
+            'down': 'up',
+            'overlap': 'overlap',
+            'unknown': 'unknown'
+        }
+        return mapping.get(direction, 'unknown')
 
