@@ -25,7 +25,10 @@ def draw_matches(img1, img2, mkpts0, mkpts1, output_path):
         cv2.circle(vis, pt2, 2, (0, 0, 255), -1)
         
     cv2.imwrite(output_path, vis)
-    print(f"Saved match visualization to {output_path}")
+    if os.path.exists(output_path):
+        print(f"SUCCESS: Saved match visualization to {os.path.abspath(output_path)}")
+    else:
+        print(f"ERROR: Failed to save match visualization to {output_path}")
 
 def main():
     m2_dir = "/app/data/ai-stitching-model/m2"
@@ -118,8 +121,15 @@ def main():
             plt.axis('equal')
             
             plt.tight_layout()
+            plt.tight_layout()
             plt.savefig("/app/data/ai-stitching-model/debug_vector_alignment.png")
-            print("Saved debug_vector_alignment.png")
+            
+            if os.path.exists("/app/data/ai-stitching-model/debug_vector_alignment.png"):
+                print(f"SUCCESS: Saved debug_vector_alignment.png at {os.path.abspath('/app/data/ai-stitching-model/debug_vector_alignment.png')}")
+            else:
+                print("ERROR: Failed to save debug_vector_alignment.png")
+
+    print("\nDEBUGGING COMPLETE")
 
 if __name__ == "__main__":
     main()

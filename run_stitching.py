@@ -38,7 +38,13 @@ def main():
     success = stitcher.create_panorama_svg(subset_files, output_path)
     
     if success:
-        print(f"Successfully created panorama at {output_path}")
+        abs_path = os.path.abspath(output_path)
+        if os.path.exists(abs_path):
+            file_size = os.path.getsize(abs_path)
+            print(f"SUCCESS: Successfully created panorama at {abs_path}")
+            print(f"File size: {file_size} bytes")
+        else:
+            print(f"ERROR: Stitcher reported success but file not found at {abs_path}")
     else:
         print("Failed to create panorama")
 
