@@ -7,6 +7,8 @@ def main():
     parser = argparse.ArgumentParser(description="Stitch SVGs from m2 directory")
     parser.add_argument("--limit", type=int, default=20, help="Number of files to stitch (default: 20)")
     parser.add_argument("--method", type=str, default="loftr", help="Matching method (loftr, lightglue, disk)")
+    parser.add_argument("--show-labels", action="store_true", help="Show filename labels in the center of each tile")
+    parser.add_argument("--show-borders", action="store_true", help="Show border rectangles around each tile")
     args = parser.parse_args()
 
     # Path to m2 directory
@@ -28,7 +30,9 @@ def main():
         use_transformer=True, # Fallback
         use_raster_matching=True,
         raster_method=args.method,
-        layout_mode='grid'
+        layout_mode='grid',
+        show_labels=args.show_labels,
+        show_borders=args.show_borders
     )
     
     # Run stitching

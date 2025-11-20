@@ -6,6 +6,8 @@ import cv2
 import xml.etree.ElementTree as ET
 from typing import List, Tuple, Optional, Dict
 from pathlib import Path
+import os
+import multiprocessing as mp
 
 from svg_vector_analyzer import VectorFeatureMatcher, SVGPathExtractor
 from image_aligner import ImageAligner
@@ -29,6 +31,147 @@ except ImportError:
     print("Warning: GraphVectorMatcher not available (torch-geometric required)")
 
 
+def _match_pairs_worker(args):
+    """
+    Worker function for parallel matching on a specific GPU
+    
+    Args:
+        args: tuple of (gpu_id, pairs, svg_files, raster_method, converter_params, refiner_params, full_size_params)
+    
+    Returns:
+        Dictionary of matching results for assigned pairs
+    """
+    import sys
+    gpu_id, pairs, svg_files, raster_method, converter_params, refiner_params, full_size_params = args
+    
+    # Use direct CUDA device (cuda:0 or cuda:1)
+    device = f'cuda:{gpu_id}'
+    
+    print(f"Worker GPU {gpu_id} starting with {len(pairs)} pairs on {device}...", flush=True)
+    sys.stdout.flush()
+    
+    # Initialize components in worker process
+    try:
+        import torch
+        from svg_converter import SVGConverter
+        from feature_matcher import DeepFeatureMatcher
+        from vector_refinement import VectorRefiner
+        from image_aligner import ImageAligner
+        
+        print(f"  GPU {gpu_id}: Imports successful", flush=True)
+        sys.stdout.flush()
+        
+        converter = SVGConverter(**converter_params)
+        full_size_converter = SVGConverter(**full_size_params)
+        refiner = VectorRefiner(**refiner_params)
+        aligner = ImageAligner()
+        
+        print(f"  GPU {gpu_id}: Initializing LoFTR model on {device}...", flush=True)
+        sys.stdout.flush()
+        
+        raster_matcher = DeepFeatureMatcher(method=raster_method, device=device)
+        
+        print(f"  GPU {gpu_id}: Model loaded successfully", flush=True)
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"  GPU {gpu_id}: Initialization error: {e}", flush=True)
+        sys.stdout.flush()
+        return {}
+    
+    results = {}
+    
+    # Progress tracking
+    progress_file = f'/app/data/ai-stitching-model/progress_gpu_{gpu_id}.json'
+    import json
+    
+    last_match_count = 0
+    last_matrix = "Identity"
+    
+    for idx, (i, j) in enumerate(pairs):
+        # Update progress every pair
+        progress_data = {
+            'gpu_id': gpu_id,
+            'current_pair': idx + 1,
+            'total_pairs': len(pairs),
+            'progress_percent': ((idx + 1) / len(pairs)) * 100,
+            'current_images': [i+1, j+1],
+            'completed_matches': len(results),
+            'current_svg_files': [
+                os.path.relpath(svg_files[i], '/app/data/ai-stitching-model'),
+                os.path.relpath(svg_files[j], '/app/data/ai-stitching-model')
+            ],
+            'last_metrics': {
+                'matches': last_match_count,
+                'matrix': last_matrix
+            }
+        }
+        
+        try:
+            with open(progress_file, 'w') as f:
+                json.dump(progress_data, f)
+        except:
+            pass
+        
+        if idx % 10 == 0:
+            print(f"  GPU {gpu_id}: Processing pair {idx}/{len(pairs)} ({i+1}<->{j+1})", flush=True)
+            sys.stdout.flush()
+        
+        try:
+            # Convert SVG to raster
+            img1 = converter.svg_to_image(svg_files[i])
+            img2 = converter.svg_to_image(svg_files[j])
+            
+            # Match features
+            matches = raster_matcher.match_features(img1, img2)
+            
+            # Update metrics for next iteration
+            last_match_count = matches['num_matches']
+            
+            # Free memory
+            del img1, img2
+            torch.cuda.empty_cache()
+            
+            # Compute homography if enough matches
+            if matches['num_matches'] >= 10:
+                H_low = aligner.compute_homography(matches)
+                if H_low is not None:
+                    # Scale homography
+                    scale_x = full_size_converter.output_size[0] / converter.output_size[0]
+                    scale_y = full_size_converter.output_size[1] / converter.output_size[1]
+                    S = np.diag([scale_x, scale_y, 1.0])
+                    S_inv = np.diag([1.0/scale_x, 1.0/scale_y, 1.0])
+                    H = S @ H_low @ S_inv
+                    
+                    # Refine
+                    try:
+                        H = refiner.refine_alignment(svg_files[i], svg_files[j], H, max_distance=50.0, translation_only=True)
+                    except:
+                        pass
+                    
+                    results[(i, j)] = {
+                        'H': H,
+                        'matches': matches['num_matches']
+                    }
+                    
+                    # Format matrix for display
+                    h_flat = H.flatten()
+                    last_matrix = f"[{h_flat[0]:.2f}, {h_flat[1]:.2f}, {h_flat[2]:.2f}, ...]"
+                else:
+                    last_matrix = "Failed to compute H"
+            else:
+                last_matrix = "Insufficient matches"
+                
+        except Exception as e:
+            print(f"  GPU {gpu_id}: Error matching {i+1}<->{j+1}: {e}", flush=True)
+            sys.stdout.flush()
+            continue
+    
+    print(f"Worker GPU {gpu_id} completed {len(results)} successful matches", flush=True)
+    sys.stdout.flush()
+    return results
+
+
+
 class SVGVectorStitcher:
     """SVG 벡터 데이터 직접 스티칭 클래스"""
     
@@ -37,7 +180,9 @@ class SVGVectorStitcher:
                  use_overlap_detection: bool = True,
                  layout_mode: str = 'auto',
                  use_raster_matching: bool = True,
-                 raster_method: str = 'loftr'):
+                 raster_method: str = 'loftr',
+                 show_labels: bool = False,
+                 show_borders: bool = False):
         """
         Args:
             use_transformer: 트랜스포머 기반 벡터 매칭 사용 여부
@@ -46,6 +191,8 @@ class SVGVectorStitcher:
             layout_mode: 레이아웃 모드 ('auto', 'horizontal', 'vertical', 'grid')
             use_raster_matching: 래스터 기반 딥러닝 매칭 사용 (권장) ⭐
             raster_method: 래스터 매칭 방법 ('loftr', 'disk', 'lightglue', 'lightglue_disk', 'dinov2')
+            show_labels: 파일명 라벨 표시 여부
+            show_borders: 타일 경계선 표시 여부
         """
         self.use_transformer = use_transformer and TRANSFORMER_AVAILABLE
         self.use_gnn = use_gnn and GNN_AVAILABLE
@@ -53,6 +200,8 @@ class SVGVectorStitcher:
         self.layout_mode = layout_mode
         self.use_raster_matching = use_raster_matching
         self.raster_method = raster_method
+        self.show_labels = show_labels
+        self.show_borders = show_borders
         
         # SVG → 래스터 변환기 (메모리 절약을 위해 크기 조정)
         # 원본 크기 유지하되, 딥러닝 매칭용으로는 작은 크기 사용
@@ -239,101 +388,63 @@ class SVGVectorStitcher:
         n = len(svg_files)
         print(f"Analyzing relationships between {n} images...")
         
-        for i in range(n):
-            for j in range(i + 1, n):
-                # 래스터 기반 딥러닝 매칭 사용 (권장) ⭐
-                if self.use_raster_matching and self.raster_matcher:
+        # Use multiprocessing to parallelize matching across 2 GPUs
+        if self.use_raster_matching and self.raster_matcher:
+            # Generate all pairs
+            all_pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+            total_pairs = len(all_pairs)
+            print(f"Total pairs to match: {total_pairs}")
+            
+            # Split pairs across 2 GPUs
+            pairs_per_gpu = total_pairs // 2
+            gpu_0_pairs = all_pairs[:pairs_per_gpu]
+            gpu_1_pairs = all_pairs[pairs_per_gpu:]
+            
+            # Prepare parameters for workers
+            converter_params = {'output_size': self.converter.output_size}
+            full_size_params = {'output_size': self.full_size_converter.output_size}
+            refiner_params = {'max_iterations': self.refiner.max_iterations, 'tolerance': self.refiner.tolerance}
+            
+            worker_args = [
+                (0, gpu_0_pairs, svg_files, self.raster_method, converter_params, refiner_params, full_size_params),
+                (1, gpu_1_pairs, svg_files, self.raster_method, converter_params, refiner_params, full_size_params)
+            ]
+            
+            print(f"GPU 0: {len(gpu_0_pairs)} pairs, GPU 1: {len(gpu_1_pairs)} pairs")
+            print("Starting parallel matching on 2 GPUs...")
+            
+            # Set spawn method for CUDA compatibility
+            try:
+                mp.set_start_method('spawn', force=True)
+            except RuntimeError:
+                pass  # Already set
+            
+            # Run matching in parallel
+            with mp.Pool(processes=2) as pool:
+                worker_results = pool.map(_match_pairs_worker, worker_args)
+            
+            # Merge results from both workers
+            for worker_result in worker_results:
+                for (i, j), match_data in worker_result.items():
+                    H = match_data['H']
+                    num_matches = match_data['matches']
+                    
+                    all_homographies[(i, j)] = H
                     try:
-                        # SVG를 래스터로 변환 (메모리 절약을 위해 작은 크기)
-                        img1 = self.converter.svg_to_image(svg_files[i])
-                        img2 = self.converter.svg_to_image(svg_files[j])
-                        
-                        # 딥러닝 모델로 매칭
-                        matches = self.raster_matcher.match_features(img1, img2)
-                        
-                        # 메모리 해제
-                        del img1, img2
-                        import torch
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        
-                        # 매칭점이 충분하면 호모그래피 계산 (위치 계산용)
-                        if matches['num_matches'] >= 10:  # 최소 10개 매칭점
-                            H_low = self.aligner.compute_homography(matches)
-                            if H_low is not None:
-                                # 호모그래피 스케일링 (Low Res -> High Res)
-                                # S @ H_low @ inv(S)
-                                scale_x = self.full_size_converter.output_size[0] / self.converter.output_size[0]
-                                scale_y = self.full_size_converter.output_size[1] / self.converter.output_size[1]
-                                
-                                S = np.diag([scale_x, scale_y, 1.0])
-                                S_inv = np.diag([1.0/scale_x, 1.0/scale_y, 1.0])
-                                
-                                H = S @ H_low @ S_inv
-                                
-                                # [NEW] 벡터 기반 정밀 보정 (Refinement)
-                                try:
-                                    print(f"    Refining alignment for {i+1}<->{j+1}...")
-                                    H = self.refiner.refine_alignment(svg_files[i], svg_files[j], H, max_distance=50.0, translation_only=True)
-                                except Exception as e:
-                                    print(f"    Warning: Refinement failed: {e}")
-                                
-                                all_homographies[(i, j)] = H
-                                try:
-                                    all_homographies[(j, i)] = np.linalg.inv(H)
-                                except np.linalg.LinAlgError:
-                                    pass
-                                
-                                relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
-                                relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
-                                
-                                print(f"  Image {i+1} <-> {j+1}: {matches['num_matches']} matches ({self.raster_method})")
-                        elif matches['num_matches'] >= 4:
-                            # 매칭점이 적어도 시도는 해봄
-                            H_low = self.aligner.compute_homography(matches)
-                            if H_low is not None:
-                                # 호모그래피 스케일링
-                                scale_x = self.full_size_converter.output_size[0] / self.converter.output_size[0]
-                                scale_y = self.full_size_converter.output_size[1] / self.converter.output_size[1]
-                                
-                                S = np.diag([scale_x, scale_y, 1.0])
-                                S_inv = np.diag([1.0/scale_x, 1.0/scale_y, 1.0])
-                                
-                                H = S @ H_low @ S_inv
-                                
-                                # [NEW] 벡터 기반 정밀 보정 (Refinement)
-                                try:
-                                    print(f"    Refining alignment for {i+1}<->{j+1}...")
-                                    H = self.refiner.refine_alignment(svg_files[i], svg_files[j], H, max_distance=50.0, translation_only=True)
-                                except Exception as e:
-                                    print(f"    Warning: Refinement failed: {e}")
-                                
-                                all_homographies[(i, j)] = H
-                                try:
-                                    all_homographies[(j, i)] = np.linalg.inv(H)
-                                except np.linalg.LinAlgError:
-                                    pass
-                                
-                                relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
-                                relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
-                                
-                                print(f"  Image {i+1} <-> {j+1}: {matches['num_matches']} matches (low quality, {self.raster_method})")
-                    except Exception as e:
-                        print(f"  Warning: Raster matching failed for {i+1}<->{j+1}: {e}, using vector matching")
-                        # Fallback to vector matching
-                        matches = self.matcher.match_vector_features(svg_files[i], svg_files[j])
-                        if matches['num_matches'] >= 4:
-                            H = self.aligner.compute_homography(matches)
-                            if H is not None:
-                                all_homographies[(i, j)] = H
-                                try:
-                                    all_homographies[(j, i)] = np.linalg.inv(H)
-                                except np.linalg.LinAlgError:
-                                    pass
-                                relationships[(i, j)] = {'homography': H, 'matches': matches['num_matches']}
-                                relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': matches['num_matches']}
-                else:
-                    # 벡터 기반 매칭 (fallback)
+                        all_homographies[(j, i)] = np.linalg.inv(H)
+                    except np.linalg.LinAlgError:
+                        pass
+                    
+                    relationships[(i, j)] = {'homography': H, 'matches': num_matches}
+                    relationships[(j, i)] = {'homography': all_homographies.get((j, i)), 'matches': num_matches}
+                    
+                    print(f"  Image {i+1} <-> {j+1}: {num_matches} matches (loftr)")
+            
+            print(f"Parallel matching complete. Total matches: {len(all_homographies) // 2}")
+        else:
+            # Fallback to sequential vector matching
+            for i in range(n):
+                for j in range(i + 1, n):
                     matches = self.matcher.match_vector_features(svg_files[i], svg_files[j])
                     if matches['num_matches'] >= 4:
                         H = self.aligner.compute_homography(matches)
@@ -349,6 +460,7 @@ class SVGVectorStitcher:
                             
                             if matches['num_matches'] >= 10:
                                 print(f"  Image {i+1} <-> {j+1}: {matches['num_matches']} matches (vector)")
+
         
         # 첫 번째 이미지의 bbox로 이미지 크기 추정
         feat0 = self.matcher.extract_features(svg_files[0])
@@ -677,19 +789,35 @@ class SVGVectorStitcher:
                 base_offset_x = offset_x
                 base_offset_y = offset_y
             
-            # 파일명 표시 (디버깅용)
-            from pathlib import Path
-            file_name = Path(svg_file).stem
+            # 파일명 표시 (옵션)
+            if self.show_labels:
+                from pathlib import Path
+                file_name = Path(svg_file).stem
+                
+                # 중앙에 큰 텍스트로 표시
+                text_elem = ET.SubElement(root, 'text')
+                text_elem.set('x', str(base_offset_x + img_width / 2))
+                text_elem.set('y', str(base_offset_y + img_height / 2))
+                text_elem.set('fill', 'blue')
+                text_elem.set('font-size', '120')
+                text_elem.set('font-weight', 'bold')
+                text_elem.set('font-family', 'Arial, sans-serif')
+                text_elem.set('opacity', '0.7')
+                text_elem.set('text-anchor', 'middle')  # 중앙 정렬
+                text_elem.set('dominant-baseline', 'middle')  # 수직 중앙 정렬
+                text_elem.text = f"{file_name}"
             
-            text_elem = ET.SubElement(root, 'text')
-            text_elem.set('x', str(base_offset_x + 20))
-            text_elem.set('y', str(base_offset_y + 50))
-            text_elem.set('fill', 'blue')
-            text_elem.set('font-size', '40')
-            text_elem.set('font-weight', 'bold')
-            text_elem.set('font-family', 'Arial, sans-serif')
-            text_elem.set('opacity', '0.5')
-            text_elem.text = f"{file_name}"
+            # 경계선 표시 (옵션)
+            if self.show_borders:
+                border_elem = ET.SubElement(root, 'rect')
+                border_elem.set('x', str(base_offset_x))
+                border_elem.set('y', str(base_offset_y))
+                border_elem.set('width', str(img_width))
+                border_elem.set('height', str(img_height))
+                border_elem.set('fill', 'none')
+                border_elem.set('stroke', 'red')
+                border_elem.set('stroke-width', '5')
+                border_elem.set('opacity', '0.8')
             
             # SVG 파일 직접 파싱하여 path 요소 가져오기
             try:
