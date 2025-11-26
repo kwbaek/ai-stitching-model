@@ -1,1 +1,1 @@
-{"gpu_id": 0, "current_pair": 2901, "total_pairs": 26163, "progress_percent": 11.088177961242977, "current_images": [10, 40], "completed_matches": 2900, "current_svg_files": ["m2/label0009.svg", "m2/label0039.svg"], "last_metrics": {"matches": 1026, "matrix": "[0.75, 0.05, 82.30, ...]"}}
+{"gpu_id": 0, "current_pair": 26163, "total_pairs": 26163, "progress_percent": 100.0, "current_images": [95, 267], "completed_matches": 26162, "current_svg_files": ["m2/label0094.svg", "m2/label0266.svg"], "last_metrics": {"matches": 1562, "matrix": "[0.76, 0.02, 636.54, ...]"}}

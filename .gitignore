@@ -63,3 +63,9 @@ Thumbs.db
 m2/*.svg
 !m2/sample_*.svg
 
+
+# GDSII files
+*.gds
+
+# Progress tracking
+progress*.json
