@@ -69,3 +69,19 @@ m2/*.svg
 
 # Progress tracking
 progress*.json
+
+# Dataset (exclude all but sample)
+dataset/*
+!dataset/sample/
+
+# Exclude all PNGs and SVGs by default
+*.png
+*.svg
+
+# Allow samples
+!dataset/sample/**/*.png
+!dataset/sample/**/*.svg
+
+# Allow generated panorama results (optional, or ignore them too)
+# panorama*.svg
+# *.gds
