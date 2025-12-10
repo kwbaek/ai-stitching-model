@@ -22,6 +22,18 @@
         .container {
             max-width: 1400px;
             margin: 0 auto;
+            padding-top: 20px;
+        }
+
+        .sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            padding-bottom: 20px;
+            margin: -20px -20px 20px -20px;
+            padding: 20px 20px 10px 20px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.2);
         }
 
         h1 {
@@ -107,6 +119,93 @@
             margin-bottom: 20px;
             font-weight: 600;
             color: #555;
+        }
+
+        .upload-container {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+        }
+
+        .upload-zone {
+            border: 2px dashed #cbd5e0;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: #667eea;
+            background: #ebf4ff;
+        }
+
+        .upload-icon {
+            font-size: 40px;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            font-size: 1.1em;
+            color: #4a5568;
+            margin-bottom: 5px;
+        }
+
+        .upload-subtext {
+            font-size: 0.9em;
+            color: #718096;
+        }
+
+        .file-list {
+            margin-top: 20px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: #f7fafc;
+            border-radius: 5px;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border-radius: 25px;
+            border: none;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 6px rgba(102, 126, 234, 0.25);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 7px 10px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
         }
 
         .gpu-grid {
@@ -209,205 +308,661 @@
 
 <body>
     <div class="container">
-        <h1>🚀 Stitching Pipeline Progress</h1>
+        <div class="container">
+            <div class="sticky-header">
+                <h1>🚀 Stitching Pipeline Progress</h1>
 
-        <div class="stage-container">
-            <div class="stage-step" id="stage-vector">
-                <div class="stage-icon">1</div>
-                <div class="stage-label">Vectorization</div>
-            </div>
-            <div class="stage-line"></div>
-            <div class="stage-step" id="stage-stitch">
-                <div class="stage-icon">2</div>
-                <div class="stage-label">Stitching</div>
-            </div>
-            <div class="stage-line"></div>
-            <div class="stage-step" id="stage-gds">
-                <div class="stage-icon">3</div>
-                <div class="stage-label">GDS Export</div>
-            </div>
-        </div>
-
-        <div class="status-box" id="pipelineStatus">
-            Waiting for pipeline to start...
-        </div>
-
-        <!-- Vectorization Progress -->
-        <div id="vectorProgress" style="display: none;">
-            <h3>Vectorization Progress</h3>
-            <div class="progress-container">
-                <div class="progress-bar" id="vectorBar"></div>
-            </div>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-label">Converted</div>
-                    <div class="stat-value" id="vectorCount">-</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Stitching Progress -->
-        <div id="stitchingProgress">
-            <h3>Stitching Progress</h3>
-            <div class="gpu-grid">
-                <!-- GPU 0 -->
-                <div class="gpu-card">
-                    <div class="gpu-header">
-                        <div class="gpu-title">GPU 0 (NVIDIA L40S)</div>
-                        <div class="gpu-status" id="status0">Idle</div>
+                <div class="stage-container" style="margin-bottom: 0;">
+                    <div class="stage-step" id="stage-segment">
+                        <div class="stage-icon">1</div>
+                        <div class="stage-label">Segmentation</div>
                     </div>
-                    <div class="progress-container">
-                        <div class="progress-bar" id="bar0"></div>
+                    <div class="stage-line"></div>
+                    <div class="stage-step" id="stage-vector">
+                        <div class="stage-icon">2</div>
+                        <div class="stage-label">Vectorization</div>
                     </div>
-                    <div class="stats-grid">
-                        <div class="stat-item">
-                            <div class="stat-label">Progress</div>
-                            <div class="stat-value" id="percent0">0%</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Pairs</div>
-                            <div class="stat-value" id="pair0">0/0</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Matches</div>
-                            <div class="stat-value" id="matches0">0</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">ETA</div>
-                            <div class="stat-value" id="eta0">-</div>
-                        </div>
+                    <div class="stage-line"></div>
+                    <div class="stage-step" id="stage-stitch">
+                        <div class="stage-icon">3</div>
+                        <div class="stage-label">Stitching</div>
                     </div>
-                </div>
-
-                <!-- GPU 1 -->
-                <div class="gpu-card">
-                    <div class="gpu-header">
-                        <div class="gpu-title">GPU 1 (NVIDIA L40S)</div>
-                        <div class="gpu-status" id="status1">Idle</div>
-                    </div>
-                    <div class="progress-container">
-                        <div class="progress-bar" id="bar1"></div>
-                    </div>
-                    <div class="stats-grid">
-                        <div class="stat-item">
-                            <div class="stat-label">Progress</div>
-                            <div class="stat-value" id="percent1">0%</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Pairs</div>
-                            <div class="stat-value" id="pair1">0/0</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">Matches</div>
-                            <div class="stat-value" id="matches1">0</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-label">ETA</div>
-                            <div class="stat-value" id="eta1">-</div>
-                        </div>
+                    <div class="stage-line"></div>
+                    <div class="stage-step" id="stage-gds">
+                        <div class="stage-icon">4</div>
+                        <div class="stage-label">GDS Export</div>
                     </div>
                 </div>
             </div>
 
-            <div class="total-progress">
-                <div class="stat-item">
-                    <div class="stat-label">Total Progress</div>
-                    <div class="stat-value" id="totalPercent">0%</div>
+            <div class="status-box" id="pipelineStatus">
+                Waiting for pipeline to start...
+            </div>
+
+            <!-- Download Section (Hidden by default) -->
+            <div id="downloadSection" style="text-align: center; margin-bottom: 30px; display: none;">
+                <a href="/manual_panorama.gds" class="btn btn-primary" download="manual_panorama.gds"
+                    style="background: linear-gradient(90deg, #11998e 0%, #38ef7d 100%); text-decoration: none; display: inline-block;">
+                    ⬇️ Download Final GDS
+                </a>
+                <a href="/download/svg" class="btn btn-primary" download="manual_panorama.svg"
+                    style="background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); text-decoration: none; display: inline-block; margin-left: 10px;">
+                    ⬇️ Download Panorama SVG
+                </a>
+            </div>
+
+
+
+            <!-- Upload Section -->
+            <div class="upload-container" id="uploadContainer">
+                <div class="upload-zone" id="dropZone">
+                    <div class="upload-icon">📁</div>
+                    <div class="upload-text">Drag & Drop SEM Images (PNG/JPG)</div>
+                    <div class="upload-subtext">or click to select files</div>
+                    <input type="file" id="fileInput" multiple accept=".png,.jpg" style="display: none;">
                 </div>
+                <div class="file-list" id="fileList"></div>
+                <div class="controls">
+                    <button class="btn btn-primary" id="runBtn">
+                        ▶ Run Full Pipeline (Segment -> Vectorize -> Stitch -> GDS)
+                    </button>
+                    <button class="btn" id="resetBtn" style="background: #e2e8f0; color: #4a5568; margin-left: 10px;">
+                        🔄 Reset
+                    </button>
+                </div>
+            </div>
+
+            <!-- Visualization Gallery -->
+            <div class="upload-container" id="vizGallery" style="display:none;">
+                <h3>Process Visualization</h3>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                        <thead>
+                            <tr style="background: #f7fafc; border-bottom: 2px solid #e2e8f0;">
+                                <th style="padding: 12px; text-align: left;">File</th>
+                                <th style="padding: 12px; text-align: center;">Raw Input</th>
+                                <th style="padding: 12px; text-align: center;">Segmentation (Tracks/Vias)</th>
+                                <th style="padding: 12px; text-align: center;">Vector Result</th>
+                            </tr>
+                        </thead>
+                        <tbody id="vizTableBody">
+                            <!-- Rows injected by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Vectorization Progress -->
+            <div id="vectorProgress" style="display: none;">
+                <h3>Vectorization Progress</h3>
                 <div class="progress-container">
-                    <div class="progress-bar" id="totalBar"></div>
+                    <div class="progress-bar" id="vectorBar"></div>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Converted</div>
+                        <div class="stat-value" id="vectorCount">-</div>
+                    </div>
                 </div>
             </div>
+
+            <!-- Stitching Progress -->
+            <div id="stitchingProgress">
+                <h3>Stitching Progress</h3>
+                <div class="gpu-grid">
+                    <!-- GPU 0 -->
+                    <div class="gpu-card">
+                        <div class="gpu-header">
+                            <div class="gpu-title">GPU 0 (NVIDIA L40S)</div>
+                            <div class="gpu-status" id="status0">Idle</div>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="bar0"></div>
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <div class="stat-label">Progress</div>
+                                <div class="stat-value" id="percent0">0%</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">Pairs</div>
+                                <div class="stat-value" id="pair0">0/0</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">Matches</div>
+                                <div class="stat-value" id="matches0">0</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">ETA</div>
+                                <div class="stat-value" id="eta0">-</div>
+                            </div>
+                        </div>
+
+                        <!-- Pair Visualization -->
+                        <div class="pair-viz-container"
+                            style="display: flex; gap: 10px; justify-content: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+                            <div style="text-align: center; width: 48%;">
+                                <div style="font-size: 0.75em; color: #666; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                                    id="file0_left_name">Waiting...</div>
+                                <div
+                                    style="height: 120px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                                    <img id="file0_left_img" src=""
+                                        style="max-width: 100%; max-height: 100%; display: none;">
+                                    <span id="file0_left_placeholder" style="color: #cbd5e0; font-size: 2em;">?</span>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; color: #cbd5e0; font-weight: bold;">+</div>
+                            <div style="text-align: center; width: 48%;">
+                                <div style="font-size: 0.75em; color: #666; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                                    id="file0_right_name">Waiting...</div>
+                                <div
+                                    style="height: 120px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                                    <img id="file0_right_img" src=""
+                                        style="max-width: 100%; max-height: 100%; display: none;">
+                                    <span id="file0_right_placeholder" style="color: #cbd5e0; font-size: 2em;">?</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- GPU 1 -->
+                    <div class="gpu-card">
+                        <div class="gpu-header">
+                            <div class="gpu-title">GPU 1 (NVIDIA L40S)</div>
+                            <div class="gpu-status" id="status1">Idle</div>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="bar1"></div>
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-item">
+                                <div class="stat-label">Progress</div>
+                                <div class="stat-value" id="percent1">0%</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">Pairs</div>
+                                <div class="stat-value" id="pair1">0/0</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">Matches</div>
+                                <div class="stat-value" id="matches1">0</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">ETA</div>
+                                <div class="stat-value" id="eta1">-</div>
+                            </div>
+                        </div>
+
+                        <!-- Pair Visualization -->
+                        <div class="pair-viz-container"
+                            style="display: flex; gap: 10px; justify-content: center; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
+                            <div style="text-align: center; width: 48%;">
+                                <div style="font-size: 0.75em; color: #666; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                                    id="file1_left_name">Waiting...</div>
+                                <div
+                                    style="height: 120px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                                    <img id="file1_left_img" src=""
+                                        style="max-width: 100%; max-height: 100%; display: none;">
+                                    <span id="file1_left_placeholder" style="color: #cbd5e0; font-size: 2em;">?</span>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; color: #cbd5e0; font-weight: bold;">+</div>
+                            <div style="text-align: center; width: 48%;">
+                                <div style="font-size: 0.75em; color: #666; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+                                    id="file1_right_name">Waiting...</div>
+                                <div
+                                    style="height: 120px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                                    <img id="file1_right_img" src=""
+                                        style="max-width: 100%; max-height: 100%; display: none;">
+                                    <span id="file1_right_placeholder" style="color: #cbd5e0; font-size: 2em;">?</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="total-progress">
+                    <div class="stat-item">
+                        <div class="stat-label">Total Progress</div>
+                        <div class="stat-value" id="totalPercent">0%</div>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="totalBar"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Result Preview Section (Hidden by default) -->
+            <div id="resultSection"
+                style="text-align: center; margin-bottom: 30px; display: none; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05);">
+                <h3 style="margin-bottom: 15px; color: #1e3c72;">Stitched Panorama Preview</h3>
+                <div style="overflow: auto; max-height: 600px; border: 1px solid #e0e0e0; border-radius: 5px;">
+                    <img id="resultImage" src="" style="max-width: 100%; height: auto; display: block; margin: 0 auto;">
+                </div>
+                <!-- Bottom Download Button -->
+                <div style="margin-top: 20px;">
+                    <a href="/manual_panorama.gds" class="btn btn-primary" download="manual_panorama.gds"
+                        style="background: linear-gradient(90deg, #11998e 0%, #38ef7d 100%); text-decoration: none; display: inline-block; font-size: 1.2em; padding: 15px 40px;">
+                        ⬇️ Download Final GDS (Bottom)
+                    </a>
+                </div>
+            </div>
+
         </div>
 
-    </div>
+        <script>
+            // Upload Logic
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            const fileList = document.getElementById('fileList');
+            const runBtn = document.getElementById('runBtn');
+            const resetBtn = document.getElementById('resetBtn');
+            let selectedFiles = [];
+            let uploadedFilenames = []; // Store server-side filenames after upload
 
-    <script>
-        function updateStage(stage) {
-            const stages = ['vector', 'stitch', 'gds'];
-            const stageMap = { 'Vectorization': 0, 'Stitching': 1, 'GDS Export': 2, 'Complete': 3 };
-            const currentIdx = stageMap[stage] || 0;
+            dropZone.addEventListener('click', () => fileInput.click());
 
-            stages.forEach((s, idx) => {
-                const el = document.getElementById(`stage-${s}`);
-                if (idx < currentIdx) {
-                    el.className = 'stage-step completed';
-                    el.querySelector('.stage-icon').innerHTML = '✓';
-                } else if (idx === currentIdx) {
-                    el.className = 'stage-step active';
-                    el.querySelector('.stage-icon').innerHTML = idx + 1;
-                } else {
+            // ... existing drag/drop listeners ...
+
+            // RESET UI FUNCTION
+            async function resetUI() {
+                // 1. Clear Data
+                selectedFiles = [];
+                uploadedFilenames = [];
+
+                // 2. Reset Upload Zone
+                updateFileList();
+                fileInput.value = ''; // Update input file list
+
+                // 3. Hide Sections
+                document.getElementById('vizGallery').style.display = 'none';
+                document.getElementById('vizTableBody').innerHTML = '';
+                document.getElementById('vectorProgress').style.display = 'none';
+                document.getElementById('downloadSection').style.display = 'none';
+                document.getElementById('resultSection').style.display = 'none';
+                document.getElementById('resultImage').src = '';
+
+                // 4. Reset Status Text
+                document.getElementById('pipelineStatus').textContent = 'Waiting for pipeline to start...';
+
+                // 5. Reset Progress Bars
+                ['vectorBar', 'bar0', 'bar1', 'totalBar'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.style.width = '0%';
+                });
+
+                ['percent0', 'percent1', 'totalPercent'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = '0%';
+                });
+
+                ['pair0', 'pair1'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = '0/0';
+                });
+
+                // 6. Reset Stages
+                ['segment', 'vector', 'stitch', 'gds'].forEach((s, idx) => {
+                    const el = document.getElementById(`stage-${s}`);
                     el.className = 'stage-step';
                     el.querySelector('.stage-icon').innerHTML = idx + 1;
+                });
+
+                // 7. Call Server Cleanup
+                try {
+                    await fetch('/cleanup', { method: 'POST' });
+                } catch (e) {
+                    console.error("Cleanup failed", e);
                 }
+
+                runBtn.disabled = false;
+                runBtn.textContent = '▶ Run Full Pipeline (Semgent -> Vectorize -> Stitch -> GDS)';
+            }
+
+            resetBtn.addEventListener('click', resetUI);
+
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
             });
-        }
 
-        async function updatePipeline() {
-            try {
-                const response = await fetch('progress_pipeline.json');
-                const data = await response.json();
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
 
-                document.getElementById('pipelineStatus').textContent = data.status;
-                updateStage(data.stage);
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                handleFiles(e.dataTransfer.files);
+            });
 
-                if (data.stage === 'Vectorization') {
-                    document.getElementById('vectorProgress').style.display = 'block';
-                    document.getElementById('vectorBar').style.width = `${data.percent}%`;
-                    document.getElementById('vectorCount').textContent = `${data.current} / ${data.total}`;
-                } else {
-                    document.getElementById('vectorProgress').style.display = 'none';
+            fileInput.addEventListener('change', (e) => {
+                handleFiles(e.target.files);
+            });
+
+            function handleFiles(files) {
+                const newFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+                selectedFiles = [...selectedFiles, ...newFiles];
+                updateFileList();
+            }
+
+            function updateFileList() {
+                fileList.innerHTML = selectedFiles.map(f => `
+                <div class="file-item">
+                    <span>${f.name}</span>
+                    <span>${(f.size / 1024).toFixed(1)} KB</span>
+                </div>
+            `).join('');
+
+                runBtn.style.display = selectedFiles.length > 0 ? 'inline-block' : 'none';
+            }
+
+            function initVizGallery(files) {
+                const tbody = document.getElementById('vizTableBody');
+                tbody.innerHTML = '';
+                document.getElementById('vizGallery').style.display = 'block';
+
+                files.forEach(filename => {
+                    const stem = filename.replace(/\.(png|jpg|jpeg)$/i, '');
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid #eee';
+
+                    tr.innerHTML = `
+                    <td style="padding: 10px; font-weight: bold;">${filename}</td>
+                    <td style="padding: 10px; text-align: center;">
+                        <img src="dataset/sems/manual/${filename}" style="max-width: 150px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                    </td>
+                    <td style="padding: 10px; text-align: center;">
+                        <div id="seg-${stem}" style="display: flex; gap: 5px; justify-content: center; opacity: 0.3;">
+                            <!-- Will be populated after segmentation -->
+                            <span style="font-size: 0.8em; color: #999;">Waiting...</span>
+                        </div>
+                    </td>
+                    <td style="padding: 10px; text-align: center;">
+                         <div id="vec-${stem}" style="opacity: 0.3;">
+                            <span style="font-size: 0.8em; color: #999;">Waiting...</span>
+                        </div>
+                    </td>
+                `;
+                    tbody.appendChild(tr);
+                });
+            }
+
+            function updateVizGallery(stage) {
+                if (!uploadedFilenames.length) return;
+
+                const stageLower = stage.toLowerCase();
+                const ts = new Date().getTime(); // Cache buster
+
+                uploadedFilenames.forEach(filename => {
+                    const stem = filename.replace(/\.(png|jpg|jpeg)$/i, '');
+
+                    // 1. Segmentation Status
+                    const segDiv = document.getElementById(`seg-${stem}`);
+                    if (segDiv) {
+                        // If we haven't loaded the image yet
+                        if (!segDiv.querySelector('img')) {
+                            if (stageLower.includes('segment') || stageLower.includes('vector') || stageLower.includes('stitch') || stageLower.includes('gds') || stageLower.includes('complete')) {
+                                // Try to load the image
+                                const imgTracks = new Image();
+                                imgTracks.src = `dataset/masks/manual/${stem}_tracks.png?t=${ts}`;
+
+                                imgTracks.onload = () => {
+                                    // Successfully found tracks, so show both (vias should be there too)
+                                    segDiv.style.opacity = '1';
+                                    segDiv.innerHTML = `
+                                    <div style="text-align: center;">
+                                        <img src="dataset/masks/manual/${stem}_tracks.png?t=${ts}" style="max-width: 100px; border: 1px solid #ccc;" title="Tracks">
+                                        <div style="font-size: 0.7em;">Tracks</div>
+                                    </div>
+                                    <div style="text-align: center;">
+                                        <img src="dataset/masks/manual/${stem}_vias.png?t=${ts}" style="max-width: 100px; border: 1px solid #ccc;" title="Vias">
+                                        <div style="font-size: 0.7em;">Vias</div>
+                                    </div>
+                                `;
+                                };
+
+                                imgTracks.onerror = () => {
+                                    // File not ready yet
+                                    if (stageLower.includes('segment')) {
+                                        segDiv.style.opacity = '0.7';
+                                        segDiv.innerHTML = '<span style="font-size: 0.8em; color: #667eea; font-weight:bold;">Processing...</span>';
+                                    } else if (stageLower.includes('vector') || stageLower.includes('stitch')) {
+                                        // If we are past segmentation but image failed, maybe it failed to segment? 
+                                        // Or maybe just timing issue.
+                                        // Let's keep trying or show "Pending".
+                                    }
+                                };
+                            }
+                        }
+                    }
+
+                    // 2. Vectorization Status
+                    const vecDiv = document.getElementById(`vec-${stem}`);
+                    if (vecDiv) {
+                        if (!vecDiv.querySelector('img')) {
+                            if (stageLower.includes('vector') || stageLower.includes('stitch') || stageLower.includes('gds') || stageLower.includes('complete')) {
+                                const imgSvg = new Image();
+                                imgSvg.src = `dataset/vectorized_manual/${stem}.svg?t=${ts}`;
+
+                                imgSvg.onload = () => {
+                                    vecDiv.style.opacity = '1';
+                                    vecDiv.innerHTML = `
+                                    <img src="dataset/vectorized_manual/${stem}.svg?t=${ts}" style="max-width: 150px; background: white; border: 1px solid #ccc;">
+                                `;
+                                };
+
+                                imgSvg.onerror = () => {
+                                    if (stageLower.includes('vector')) {
+                                        vecDiv.style.opacity = '0.7';
+                                        vecDiv.innerHTML = '<span style="font-size: 0.8em; color: #667eea; font-weight:bold;">Vectorizing...</span>';
+                                    }
+                                };
+                            }
+                        }
+                    }
+                });
+            }
+            async function runPipeline() {
+                if (selectedFiles.length === 0) return;
+
+                runBtn.disabled = true;
+                runBtn.textContent = 'Uploading & Starting...';
+
+                // Hide download section if restarting
+                document.getElementById('downloadSection').style.display = 'none';
+                document.getElementById('resultSection').style.display = 'none';
+                document.getElementById('resultImage').src = '';
+
+                try {
+                    // 0. Cleanup Previous Files (Ensure only current batch is processed)
+                    await fetch('/cleanup', { method: 'POST' });
+
+                    // 1. Upload Files
+                    const formData = new FormData();
+                    selectedFiles.forEach(f => formData.append('files[]', f));
+
+                    const uploadRes = await fetch('/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!uploadRes.ok) throw new Error('Upload failed');
+
+                    const uploadData = await uploadRes.json();
+                    uploadedFilenames = uploadData.files || [];
+
+                    // Init Gallery
+                    initVizGallery(uploadedFilenames);
+
+                    // 2. Trigger Run
+                    const runRes = await fetch('/run', {
+                        method: 'POST'
+                    });
+
+                    if (!runRes.ok) throw new Error('Failed to start pipeline');
+
+                    // 3. Reset
+                    selectedFiles = [];
+                    updateFileList();
+                    runBtn.textContent = 'Pipeline Started!';
+                    setTimeout(() => {
+                        runBtn.disabled = false;
+                        runBtn.textContent = '▶ Run Full Pipeline (Semgent -> Vectorize -> Stitch -> GDS)';
+                    }, 3000);
+
+                } catch (e) {
+                    alert('Error: ' + e.message);
+                    runBtn.disabled = false;
+                    runBtn.textContent = '▶ Run Full Pipeline';
                 }
-            } catch (e) {
-                // Ignore errors if file doesn't exist yet
             }
-        }
 
-        async function updateStitching() {
-            try {
-                // Fetch GPU 0
-                const res0 = await fetch('progress_gpu_0.json');
-                const data0 = await res0.json();
-                updateCard(0, data0);
+            // Add event listener for the run button
+            runBtn.addEventListener('click', runPipeline);
 
-                // Fetch GPU 1
-                const res1 = await fetch('progress_gpu_1.json');
-                const data1 = await res1.json();
-                updateCard(1, data1);
+            // --- Existing Progress Logic (Modified to fetch from /status) ---
+            function updateStage(stage) {
+                const stages = ['segment', 'vector', 'stitch', 'gds'];
+                // Normalize stage string from JSON which might be capitalized
+                const stageLower = stage.toLowerCase();
 
-                // Update Total
-                const totalPairs = data0.total_pairs + data1.total_pairs;
-                const currentPairs = data0.current_pair + data1.current_pair;
-                const totalPercent = (currentPairs / totalPairs) * 100;
+                let currentIdx = 0;
+                if (stageLower.includes('segment')) currentIdx = 0;
+                else if (stageLower.includes('vector')) currentIdx = 1;
+                else if (stageLower.includes('stitch')) currentIdx = 2;
+                else if (stageLower.includes('gds')) currentIdx = 3;
+                else if (stageLower.includes('complete')) currentIdx = 4;
 
-                document.getElementById('totalPercent').textContent = totalPercent.toFixed(1) + '%';
-                document.getElementById('totalBar').style.width = totalPercent + '%';
+                // Show/Hide Download Section
+                if (currentIdx === 4 || stage === 'Complete') {
+                    document.getElementById('downloadSection').style.display = 'block';
 
-            } catch (e) {
-                console.log('Waiting for stitching data...');
+                    // Show Result Preview
+                    if (document.getElementById('resultSection').style.display === 'none') {
+                        document.getElementById('resultSection').style.display = 'block';
+                        document.getElementById('resultImage').src = 'manual_panorama.svg?t=' + new Date().getTime();
+                    }
+                }
+
+                // Update Gallery Images
+                updateVizGallery(stage);
+
+                stages.forEach((s, idx) => {
+                    const el = document.getElementById(`stage-${s}`);
+                    if (idx < currentIdx) {
+                        el.className = 'stage-step completed';
+                        el.querySelector('.stage-icon').innerHTML = '✓';
+                    } else if (idx === currentIdx) {
+                        el.className = 'stage-step active';
+                        el.querySelector('.stage-icon').innerHTML = idx + 1;
+                    } else {
+                        el.className = 'stage-step';
+                        el.querySelector('.stage-icon').innerHTML = idx + 1;
+                    }
+                });
             }
-        }
 
-        function updateCard(id, data) {
-            document.getElementById(`percent${id}`).textContent = data.progress_percent.toFixed(1) + '%';
-            document.getElementById(`bar${id}`).style.width = data.progress_percent + '%';
-            document.getElementById(`pair${id}`).textContent = `${data.current_pair} / ${data.total_pairs}`;
-            document.getElementById(`matches${id}`).textContent = data.completed_matches;
-            document.getElementById(`status${id}`).textContent = 'Running';
-            document.getElementById(`status${id}`).className = 'gpu-status running';
+            async function updatePipeline() {
+                try {
+                    const response = await fetch('progress_pipeline.json');
+                    const data = await response.json();
 
-            if (data.eta_seconds) {
-                const mins = Math.floor(data.eta_seconds / 60);
-                const secs = Math.floor(data.eta_seconds % 60);
-                document.getElementById(`eta${id}`).textContent = `${mins}m ${secs}s`;
+                    document.getElementById('pipelineStatus').textContent = data.status + (data.percent ? ` (${data.percent}%)` : '');
+                    updateStage(data.stage);
+
+                    // Show Vector progress if applicable
+                    if (data.stage === 'Vectorization') {
+                        document.getElementById('vectorProgress').style.display = 'block';
+                        if (data.percent) document.getElementById('vectorBar').style.width = `${data.percent}%`;
+                        if (data.total) document.getElementById('vectorCount').textContent = `${data.current} / ${data.total}`;
+                    } else {
+                        document.getElementById('vectorProgress').style.display = 'none';
+                    }
+                } catch (e) {
+                    // Ignore errors if file doesn't exist yet
+                }
             }
-        }
 
-        setInterval(() => {
-            updatePipeline();
-            updateStitching();
-        }, 1000);
-    </script>
+            async function updateStitching() {
+                try {
+                    // Fetch GPU 0
+                    const res0 = await fetch('progress_gpu_0.json');
+                    const data0 = await res0.json();
+                    updateCard(0, data0);
+
+                    // Fetch GPU 1
+                    const res1 = await fetch('progress_gpu_1.json');
+                    const data1 = await res1.json();
+                    updateCard(1, data1);
+
+                    // Update Total
+                    const totalPairs = data0.total_pairs + data1.total_pairs;
+                    const currentPairs = data0.current_pair + data1.current_pair;
+                    const totalPercent = (currentPairs / totalPairs) * 100;
+
+                    document.getElementById('totalPercent').textContent = totalPercent.toFixed(1) + '%';
+                    document.getElementById('totalBar').style.width = totalPercent + '%';
+
+                } catch (e) {
+                    // console.log('Waiting for stitching data...');
+                }
+            }
+
+            function updateCard(id, data) {
+                document.getElementById(`percent${id}`).textContent = data.progress_percent.toFixed(1) + '%';
+                document.getElementById(`bar${id}`).style.width = data.progress_percent + '%';
+                document.getElementById(`pair${id}`).textContent = `${data.current_pair} / ${data.total_pairs}`;
+                document.getElementById(`matches${id}`).textContent = data.completed_matches;
+                document.getElementById(`status${id}`).textContent = 'Running';
+                document.getElementById(`status${id}`).className = 'gpu-status running';
+
+                if (data.eta_seconds) {
+                    const mins = Math.floor(data.eta_seconds / 60);
+                    const secs = Math.floor(data.eta_seconds % 60);
+                    document.getElementById(`eta${id}`).textContent = `${mins}m ${secs}s`;
+                }
+
+                // Update Pair Visualization
+                if (data.current_svg_files && data.current_svg_files.length === 2) {
+                    const leftPath = data.current_svg_files[0];
+                    const rightPath = data.current_svg_files[1];
+                    const ts = new Date().getTime(); // Cache buster
+
+                    // Extract filename for display
+                    const leftName = leftPath.split('/').pop();
+                    const rightName = rightPath.split('/').pop();
+
+                    document.getElementById(`file${id}_left_name`).textContent = leftName;
+                    document.getElementById(`file${id}_right_name`).textContent = rightName;
+
+                    const leftImg = document.getElementById(`file${id}_left_img`);
+                    const rightImg = document.getElementById(`file${id}_right_img`);
+
+                    if (leftImg.src !== leftPath) { // Only update if changed to avoid flickering
+                        // Note: data.current_svg_files are relative to BASE_DIR, server serves from BASE_DIR
+                        // so we can use them directly if they don't start with /
+                        // Actually they probably start with dataset/... which is served from root.
+                        // Let's ensure we use the correct path. The server serves BASE_DIR at root.
+                        // The python script sends: os.path.relpath(svg_files[i], '/app/data/ai-stitching-model')
+                        // Example: "dataset/vectorized_manual/foo.svg"
+                        leftImg.src = leftPath + '?t=' + ts;
+                        rightImg.src = rightPath + '?t=' + ts;
+
+                        leftImg.style.display = 'block';
+                        rightImg.style.display = 'block';
+
+                        document.getElementById(`file${id}_left_placeholder`).style.display = 'none';
+                        document.getElementById(`file${id}_right_placeholder`).style.display = 'none';
+                    }
+                }
+            }
+
+            setInterval(() => {
+                updatePipeline();
+                updateStitching();
+            }, 1000);
+        </script>
 </body>
 
 </html>

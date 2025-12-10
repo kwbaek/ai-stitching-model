@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+        "ai-stitching": {
+            "command": "/app/data/ai-stitching-model/run_mcp_server.sh",
+            "args": []
+        }
+    }
+}

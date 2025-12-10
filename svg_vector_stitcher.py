@@ -837,21 +837,56 @@ class SVGVectorStitcher:
                 if not path_d:
                     continue
                 
-                # 원본 형태 유지, translation만 적용 (호모그래피는 위치 계산에만 사용)
-                # path d 문자열에서 좌표 추출 및 변환 (단순 translation)
-                def replace_coords(match):
-                    x = float(match.group(1))
-                    y = float(match.group(2))
-                    
-                    # 원본 형태 유지, translation만 적용
-                    x_new = x + base_offset_x
-                    y_new = y + base_offset_y
-                    
-                    return f"{x_new:.1f},{y_new:.1f}"
+                # Parse and transform path using svg.path for robustness
+                from svg.path import parse_path, Line, CubicBezier, QuadraticBezier, Arc, Move, Close
                 
-                # 좌표 쌍 찾아서 변환
-                path_d_transformed = re.sub(r'([-]?\d+\.?\d*),([-]?\d+\.?\d*)', replace_coords, path_d)
-                
+                try:
+                    path = parse_path(path_d)
+                    offset = complex(base_offset_x, base_offset_y)
+                    
+                    new_d_parts = []
+                    
+                    for segment in path:
+                        # Apply offset to relevant points
+                        # Note: segment.start is typically just for reference/Move, 
+                        # but modifying it helps consistency in the object model.
+                        # What matters for serialization is usually the 'end' and control points, 
+                        # except for Move commands.
+                        
+                        if isinstance(segment, Move):
+                            start = segment.start + offset
+                            new_d_parts.append(f"M {start.real:.2f} {start.imag:.2f}")
+                            
+                        elif isinstance(segment, Line):
+                            end = segment.end + offset
+                            new_d_parts.append(f"L {end.real:.2f} {end.imag:.2f}")
+                            
+                        elif isinstance(segment, CubicBezier):
+                            c1 = segment.control1 + offset
+                            c2 = segment.control2 + offset
+                            end = segment.end + offset
+                            new_d_parts.append(f"C {c1.real:.2f} {c1.imag:.2f} {c2.real:.2f} {c2.imag:.2f} {end.real:.2f} {end.imag:.2f}")
+                            
+                        elif isinstance(segment, QuadraticBezier):
+                            c1 = segment.control1 + offset
+                            end = segment.end + offset
+                            new_d_parts.append(f"Q {c1.real:.2f} {c1.imag:.2f} {end.real:.2f} {end.imag:.2f}")
+
+                        elif isinstance(segment, Close):
+                            new_d_parts.append("Z")
+                            
+                        elif isinstance(segment, Arc):
+                            # Arc is complex (radius, rotation, arc flags stay same, end point moves)
+                            end = segment.end + offset
+                            # Arguments: rx ry rot large_arc sweep end_x end_y
+                            new_d_parts.append(f"A {segment.radius.real:.2f} {segment.radius.imag:.2f} {segment.rotation:.2f} {1 if segment.large_arc else 0} {1 if segment.sweep else 0} {end.real:.2f} {end.imag:.2f}")
+                    
+                    path_d_transformed = " ".join(new_d_parts)
+                    
+                except Exception as e:
+                    print(f"Error transforming path in {file_name}: {e}")
+                    continue
+
                 # path 요소 생성
                 path_elem = ET.SubElement(root, 'path')
                 path_elem.set('d', path_d_transformed)
@@ -911,9 +946,11 @@ class SVGVectorStitcher:
         import re
         # xmlns:ns0 형식을 일반 xmlns로 변경
         content = re.sub(r'xmlns:ns0="http://www\.w3\.org/2000/svg"', 'xmlns="http://www.w3.org/2000/svg"', content)
-        # <ns0:svg> -> <svg>, </ns0:svg> -> </svg>
-        content = re.sub(r'<ns0:svg', '<svg', content)
-        content = re.sub(r'</ns0:svg>', '</svg>', content)
+        # Remove all ns0: prefixes
+        content = re.sub(r'ns0:', '', content)
+        # Fix root tag if needed (though removing ns0: above handles <ns0:svg>)
+        # content = re.sub(r'<ns0:svg', '<svg', content) # Redundant now
+        # content = re.sub(r'</ns0:svg>', '</svg>', content) # Redundant now
         # 중복된 xmlns 속성 제거
         svg_tag_match = re.search(r'<svg\s+([^>]*)>', content)
         if svg_tag_match:

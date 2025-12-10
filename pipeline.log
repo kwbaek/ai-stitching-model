@@ -1,0 +1,16 @@
+Collecting histogram:   0%|          | 0/6 [00:00<?, ?it/s]Collecting histogram:  33%|███▎      | 2/6 [00:00<00:00, 12.56it/s]Collecting histogram:  67%|██████▋   | 4/6 [00:00<00:00,  8.44it/s]Collecting histogram:  83%|████████▎ | 5/6 [00:00<00:00,  7.98it/s]Collecting histogram: 100%|██████████| 6/6 [00:00<00:00,  7.58it/s]Collecting histogram: 100%|██████████| 6/6 [00:00<00:00,  8.11it/s]
+Otsu thresholds: 67 (tracks), 142 (vias)
+Generating masks:   0%|          | 0/6 [00:00<?, ?it/s]Generating masks:   0%|          | 0/6 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "/app/data/ai-stitching-model/run_otsu_segmentation.py", line 164, in <module>
+    main()
+  File "/app/data/ai-stitching-model/run_otsu_segmentation.py", line 129, in main
+    Image.fromarray(mask_vias_np).save(args.output_dir / f"{ipath.stem}_vias.png")
+  File "/home/samsung/.local/lib/python3.10/site-packages/PIL/Image.py", line 3294, in fromarray
+    size = 1 if ndim == 1 else shape[1], shape[0]
+IndexError: tuple index out of range
+LightGlue not available. Install with: pip install lightglue
+Using Manual upload directory...
+
+=== Stage 1: Segmentation (Otsu) ===
+Segmentation failed: Command '['python3', 'run_otsu_segmentation.py', '/app/data/ai-stitching-model/dataset/sems/manual', '/app/data/ai-stitching-model/dataset/masks/manual']' returned non-zero exit status 1.
